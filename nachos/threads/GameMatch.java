@@ -40,6 +40,68 @@ public class GameMatch {
      * or abilityExpert; return -1 otherwise.
      */
     public int play (int ability) {
-	return -1;
+	    return -1;
+    }
+
+        // Place GameMatch test code inside of the GameMatch class.
+
+    public static void matchTest4 () {
+        final GameMatch match = new GameMatch(2);
+
+        // Instantiate the threads
+        KThread beg1 = new KThread( new Runnable () {
+            public void run() {
+                int r = match.play(GameMatch.abilityBeginner);
+                System.out.println ("beg1 matched");
+                // beginners should match with a match number of 1
+                Lib.assertTrue(r == 1, "expected match number of 1");
+            }
+            });
+        beg1.setName("B1");
+
+        KThread beg2 = new KThread( new Runnable () {
+            public void run() {
+                int r = match.play(GameMatch.abilityBeginner);
+                System.out.println ("beg2 matched");
+                // beginners should match with a match number of 1
+                Lib.assertTrue(r == 1, "expected match number of 1");
+            }
+            });
+        beg2.setName("B2");
+
+        KThread int1 = new KThread( new Runnable () {
+            public void run() {
+                int r = match.play(GameMatch.abilityIntermediate);
+                Lib.assertNotReached("int1 should not have matched!");
+            }
+            });
+        int1.setName("I1");
+
+        KThread exp1 = new KThread( new Runnable () {
+            public void run() {
+                int r = match.play(GameMatch.abilityExpert);
+                Lib.assertNotReached("exp1 should not have matched!");
+            }
+            });
+        exp1.setName("E1");
+
+        // Run the threads.  The beginner threads should successfully
+        // form a match, the other threads should not.  The outcome
+        // should be the same independent of the order in which threads
+        // are forked.
+        beg1.fork();
+        int1.fork();
+        exp1.fork();
+        beg2.fork();
+
+        // Assume join is not implemented, use yield to allow other
+        // threads to run
+        for (int i = 0; i < 10; i++) {
+            KThread.currentThread().yield();
+        }
+    }
+    
+    public static void selfTest() {
+	    matchTest4();
     }
 }
