@@ -292,8 +292,6 @@ public class KThread {
 
 		Lib.assertTrue(this.canJoin);
 
-		// all code here is new
-
 		// must disable interrupts in order to call sleep
 		boolean intStatus = Machine.interrupt().disable();
 
@@ -307,7 +305,7 @@ public class KThread {
 		}
 
 		// sleep the current thread
-		currentThread.sleep();
+		KThread.sleep();
 
 		Machine.interrupt().restore(intStatus);
 	}

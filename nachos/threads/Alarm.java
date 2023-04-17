@@ -1,5 +1,7 @@
 package nachos.threads;
 
+import java.util.*;
+
 import nachos.machine.*;
 
 /**
@@ -29,7 +31,17 @@ public class Alarm {
 	 * should be run.
 	 */
 	public void timerInterrupt() {
-		KThread.currentThread().yield();
+		boolean intStatus = Machine.interrupt().disable();
+
+		long time = Machine.timer().getTime();
+
+		while (waitingQueue.peek() != null && waitingQueue.peek().getWakeTime() <= time) {
+			waitingQueue.poll().getThread().ready();
+		}
+
+		Machine.interrupt().restore(intStatus);
+
+		KThread.yield();		
 	}
 
 	/**
@@ -45,10 +57,18 @@ public class Alarm {
 	 * @see nachos.machine.Timer#getTime()
 	 */
 	public void waitUntil(long x) {
-		// for now, cheat just to get something working (busy waiting is bad)
-		long wakeTime = Machine.timer().getTime() + x;
-		while (wakeTime > Machine.timer().getTime())
-			KThread.yield();
+		if(x <= 0) 
+			return;
+
+		boolean intStatus = Machine.interrupt().disable();
+
+		WThread newWThread = new WThread(Machine.timer().getTime() + x, KThread.currentThread());
+
+		waitingQueue.add(newWThread);
+
+		KThread.sleep();											
+		
+		Machine.interrupt().restore(intStatus);
 	}
 
         /**
@@ -60,8 +80,33 @@ public class Alarm {
 	 * <p>
 	 * @param thread the thread whose timer should be cancelled.
 	 */
-        public boolean cancel(KThread thread) {
+    public boolean cancel(KThread thread) {
 		return false;
+	}
+
+	private PriorityQueue<WThread> waitingQueue = new PriorityQueue<>();
+
+	private class WThread implements Comparable<WThread> {
+		private KThread thread;
+		private long wakeTime;
+
+		public WThread(long wakeUpTime, KThread thread) {
+			this.thread = thread;
+			this.wakeTime = wakeUpTime;
+		}
+
+		public long getWakeTime() { 
+			return this.wakeTime; 
+		}
+
+		public KThread getThread() { 
+			return this.thread; 
+		}
+
+		@Override
+        public int compareTo(WThread other){
+			return Long.compare(getWakeTime(), other.getWakeTime());
+        }
 	}
 
 	// Add Alarm testing code to the Alarm class
@@ -71,9 +116,9 @@ public class Alarm {
 
 		for (int d : durations) {
 			t0 = Machine.timer().getTime();
-			ThreadedKernel.alarm.waitUntil (d);
+			ThreadedKernel.alarm.waitUntil(d);
 			t1 = Machine.timer().getTime();
-			System.out.println ("alarmTest1: waited for " + (t1 - t0) + " ticks");
+			System.out.println("alarmTest1: waited for " + (t1 - t0) + " ticks");
 		}
     }
 
