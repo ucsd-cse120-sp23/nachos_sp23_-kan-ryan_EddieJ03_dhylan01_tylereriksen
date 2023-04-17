@@ -203,6 +203,11 @@ public class KThread {
 
 		currentThread.status = statusFinished;
 
+		// wake up thread that called join on this thread if this thread was joined
+		if (!currentThread.canJoin) {
+			currentThread.parentThread.ready();
+		}
+
 		sleep();
 	}
 
@@ -285,6 +290,26 @@ public class KThread {
 
 		Lib.assertTrue(this != currentThread);
 
+		Lib.assertTrue(this.canJoin);
+
+		// all code here is new
+
+		// must disable interrupts in order to call sleep
+		boolean intStatus = Machine.interrupt().disable();
+
+		this.canJoin = false;
+
+		this.parentThread = currentThread;
+		
+		// thread already finished so return immediately
+		if (this.status == statusFinished) {
+			return;
+		}
+
+		// sleep the current thread
+		currentThread.sleep();
+
+		Machine.interrupt().restore(intStatus);
 	}
 
 	/**
@@ -417,7 +442,8 @@ public class KThread {
 			public void run() {
 				System.out.println("I (heart) Nachos!");
 			}
-			});
+		});
+		
 		child1.setName("child1").fork();
 
 		// We want the child to finish before we call join.  Although
@@ -492,6 +518,10 @@ public class KThread {
 	private static KThread currentThread = null;
 
 	private static KThread toBeDestroyed = null;
+
+	private KThread parentThread = null;
+
+	private boolean canJoin = true;
 
 	private static KThread idleThread = null;
 }

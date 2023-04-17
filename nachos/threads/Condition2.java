@@ -2,6 +2,8 @@ package nachos.threads;
 
 import nachos.machine.*;
 
+import java.util.*;
+
 /**
  * An implementation of condition variables that disables interrupt()s for
  * synchronization.
