@@ -35,7 +35,8 @@ public class Alarm {
 
 		long time = Machine.timer().getTime();
 
-		while (waitingQueue.peek() != null && waitingQueue.peek().getWakeTime() <= time) {
+		while (waitingQueue.peek() != null && 
+				waitingQueue.peek().getWakeTime() <= time) {
 			waitingQueue.poll().getThread().ready();
 		}
 
@@ -71,7 +72,7 @@ public class Alarm {
 		Machine.interrupt().restore(intStatus);
 	}
 
-        /**
+    /**
 	 * Cancel any timer set by <i>thread</i>, effectively waking
 	 * up the thread immediately (placing it in the scheduler
 	 * ready set) and returning true.  If <i>thread</i> has no
@@ -81,7 +82,24 @@ public class Alarm {
 	 * @param thread the thread whose timer should be cancelled.
 	 */
     public boolean cancel(KThread thread) {
-		return false;
+		boolean disableInterruptResult = Machine.interrupt().disable();
+
+		boolean cancelled = false;
+
+		for (WThread wThread : this.waitingQueue) {
+			KThread currThread = wThread.getThread();
+			
+			if (currThread == thread) {
+				waitingQueue.remove(wThread);
+				currThread.ready();
+				cancelled = true;
+				break;
+			}
+		}
+
+		Machine.interrupt().restore(disableInterruptResult);
+
+		return cancelled;
 	}
 
 	private PriorityQueue<WThread> waitingQueue = new PriorityQueue<>();
@@ -90,9 +108,9 @@ public class Alarm {
 		private KThread thread;
 		private long wakeTime;
 
-		public WThread(long wakeUpTime, KThread thread) {
+		public WThread(long wakeTime, KThread thread) {
 			this.thread = thread;
-			this.wakeTime = wakeUpTime;
+			this.wakeTime = wakeTime;
 		}
 
 		public long getWakeTime() { 

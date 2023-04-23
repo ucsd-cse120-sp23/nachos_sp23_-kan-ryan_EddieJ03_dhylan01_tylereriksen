@@ -23,6 +23,7 @@ public class Condition2 {
 	 */
 	public Condition2(Lock conditionLock) {
 		this.conditionLock = conditionLock;
+        this.conditionalQueue = new LinkedList<>();
 	}
 
 	/**
@@ -34,8 +35,22 @@ public class Condition2 {
 	public void sleep() {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
 
+        // disable interrupt to make atomic operation
+		boolean intStatus = Machine.interrupt().disable();
+
+        KThread currThread = KThread.currentThread();
+
+		// add this thread into waiting queue of this conditional variable
+		conditionalQueue.add(currThread);
+
 		conditionLock.release();
 
+		// sleep the current thread AFTER release
+		KThread.sleep();
+
+		Machine.interrupt().restore(intStatus);
+        
+        // reacquire lock before leaving sleep
 		conditionLock.acquire();
 	}
 
@@ -45,6 +60,18 @@ public class Condition2 {
 	 */
 	public void wake() {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
+
+		boolean intStatus = Machine.interrupt().disable();
+
+		if (this.conditionalQueue.size() > 0) {
+            KThread thread = conditionalQueue.poll();
+
+            // cancel any existing timer
+            if(!ThreadedKernel.alarm.cancel(thread))
+                thread.ready();
+		}
+
+		Machine.interrupt().restore(intStatus);
 	}
 
 	/**
@@ -53,9 +80,24 @@ public class Condition2 {
 	 */
 	public void wakeAll() {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
+
+		boolean intStatus = Machine.interrupt().disable();
+
+        int len = this.conditionalQueue.size();
+
+        while(len-- > 0) {
+            // get head item and remove from queue
+            KThread currThread = this.conditionalQueue.poll();
+
+            // cancel any existing timer
+            if(!ThreadedKernel.alarm.cancel(currThread))
+                currThread.ready();
+        }
+
+		Machine.interrupt().restore(intStatus);
 	}
 
-        /**
+    /**
 	 * Atomically release the associated lock and go to sleep on
 	 * this condition variable until either (1) another thread
 	 * wakes it using <tt>wake()</tt>, or (2) the specified
@@ -65,9 +107,34 @@ public class Condition2 {
 	 */
     public void sleepFor(long timeout) {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
+
+        // disable interrupts to make atomic
+		boolean intStatus = Machine.interrupt().disable();
+
+        KThread currThread = KThread.currentThread();
+
+		this.conditionalQueue.add(currThread);
+
+        // release the lock
+		conditionLock.release();
+
+        // wait in here until woken or waitUntil finishes
+		ThreadedKernel.alarm.waitUntil(timeout);
+
+		this.conditionalQueue.remove(currThread);
+
+        // restore interrupts
+		Machine.interrupt().restore(intStatus);
+
+        // reacquire lock before returning
+		conditionLock.acquire();
 	}
 
     private Lock conditionLock;
+
+    private LinkedList<KThread> conditionalQueue;
+	
+    private KThread threadTobeWake;
 
 	// Place Condition2 testing code in the Condition2 class.
 
