@@ -51,6 +51,7 @@ public class ThreadedKernel extends Kernel {
 		// SynchList.selfTest();
 		Alarm.selfTest();
 		Condition2.selfTest();
+		Rendezvous.selfTest();
 		// GameMatch.selfTest();
 		// if (Machine.bank() != null) {
 		// 	ElevatorBank.selfTest();

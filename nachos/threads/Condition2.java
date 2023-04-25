@@ -86,12 +86,7 @@ public class Condition2 {
         int len = this.conditionalQueue.size();
 
         while(len-- > 0) {
-            // get head item and remove from queue
-            KThread currThread = this.conditionalQueue.poll();
-
-            // cancel any existing timer
-            if(!ThreadedKernel.alarm.cancel(currThread))
-                currThread.ready();
+            wake();
         }
 
 		Machine.interrupt().restore(intStatus);
