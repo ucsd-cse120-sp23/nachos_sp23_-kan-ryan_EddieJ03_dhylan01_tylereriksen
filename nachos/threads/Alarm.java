@@ -31,17 +31,17 @@ public class Alarm {
 	 * should be run.
 	 */
 	public void timerInterrupt() {
-		boolean intStatus = Machine.interrupt().disable();
-
+		// current interrupt time
 		long time = Machine.timer().getTime();
 
 		while (waitingQueue.peek() != null && 
-				waitingQueue.peek().getWakeTime() <= time) {
-			waitingQueue.poll().getThread().ready();
+				waitingQueue.peek().wakeTime <= time) {
+			boolean intStatus = Machine.interrupt().disable();
+			waitingQueue.poll().thread.ready();
+			Machine.interrupt().restore(intStatus);
 		}
 
-		Machine.interrupt().restore(intStatus);
-
+		// cause current thread to yield
 		KThread.yield();		
 	}
 
@@ -61,14 +61,11 @@ public class Alarm {
 		if(x <= 0) 
 			return;
 
-		boolean intStatus = Machine.interrupt().disable();
-
 		WThread newWThread = new WThread(Machine.timer().getTime() + x, KThread.currentThread());
-
 		waitingQueue.add(newWThread);
 
+		boolean intStatus = Machine.interrupt().disable();
 		KThread.sleep();											
-		
 		Machine.interrupt().restore(intStatus);
 	}
 
@@ -82,22 +79,20 @@ public class Alarm {
 	 * @param thread the thread whose timer should be cancelled.
 	 */
     public boolean cancel(KThread thread) {
-		boolean disableInterruptResult = Machine.interrupt().disable();
-
 		boolean cancelled = false;
 
 		for (WThread wThread : this.waitingQueue) {
-			KThread currThread = wThread.getThread();
+			KThread currThread = wThread.thread;
 			
 			if (currThread == thread) {
 				waitingQueue.remove(wThread);
+				boolean disableInterruptResult = Machine.interrupt().disable();
 				currThread.ready();
+				Machine.interrupt().restore(disableInterruptResult);
 				cancelled = true;
 				break;
 			}
 		}
-
-		Machine.interrupt().restore(disableInterruptResult);
 
 		return cancelled;
 	}
@@ -105,25 +100,17 @@ public class Alarm {
 	private PriorityQueue<WThread> waitingQueue = new PriorityQueue<>();
 
 	private class WThread implements Comparable<WThread> {
-		private KThread thread;
-		private long wakeTime;
+		KThread thread;
+		long wakeTime;
 
 		public WThread(long wakeTime, KThread thread) {
 			this.thread = thread;
 			this.wakeTime = wakeTime;
 		}
 
-		public long getWakeTime() { 
-			return this.wakeTime; 
-		}
-
-		public KThread getThread() { 
-			return this.thread; 
-		}
-
 		@Override
         public int compareTo(WThread other){
-			return Long.compare(getWakeTime(), other.getWakeTime());
+			return Long.compare(this.wakeTime, other.wakeTime);
         }
 	}
 
@@ -145,7 +132,6 @@ public class Alarm {
     // Invoke Alarm.selfTest() from ThreadedKernel.selfTest()
     public static void selfTest() {
 		alarmTest1();
-
 		// Invoke your other test methods here ...
     }
 }
