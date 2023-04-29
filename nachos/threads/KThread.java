@@ -204,7 +204,7 @@ public class KThread {
 		currentThread.status = statusFinished;
 
 		// wake up thread that called join on this thread if this thread was joined
-		if (!currentThread.canJoin) {
+		if (currentThread.parentThread != null) {
 			currentThread.parentThread.ready();
 		}
 
@@ -292,9 +292,6 @@ public class KThread {
 
 		Lib.assertTrue(this.canJoin);
 
-		// must disable interrupts in order to call sleep
-		boolean intStatus = Machine.interrupt().disable();
-
 		this.canJoin = false;
 
 		this.parentThread = currentThread;
@@ -303,6 +300,9 @@ public class KThread {
 		if (this.status == statusFinished) {
 			return;
 		}
+
+		// must disable interrupts in order to call sleep
+		boolean intStatus = Machine.interrupt().disable();
 
 		// sleep the current thread
 		KThread.sleep();
@@ -522,4 +522,6 @@ public class KThread {
 	private boolean canJoin = true;
 
 	private static KThread idleThread = null;
+
+	public int exchangeRes = 0;
 }
