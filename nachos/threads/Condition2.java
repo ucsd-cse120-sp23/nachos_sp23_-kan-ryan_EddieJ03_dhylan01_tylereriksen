@@ -35,7 +35,8 @@ public class Condition2 {
 	public void sleep() {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
 
-        // disable interrupt to make atomic operation
+        // we need to disable interrupts to make this an atomic operation
+        // kinda hacky but it is what it is
 		boolean intStatus = Machine.interrupt().disable();
 
         KThread currThread = KThread.currentThread();
@@ -43,6 +44,7 @@ public class Condition2 {
 		// add this thread into waiting queue of this conditional variable
 		conditionalQueue.add(currThread);
 
+        // release the lock for somebody else ( don't do this AFTER sleep :( )
 		conditionLock.release();
 
 		// sleep the current thread AFTER release
@@ -66,8 +68,8 @@ public class Condition2 {
 		if (this.conditionalQueue.size() > 0) {
             KThread thread = conditionalQueue.poll();
 
-            // cancel any existing timer
-            if(!ThreadedKernel.alarm.cancel(thread))
+            // cancel any existing timer - if no timer wake the thread
+            if (!ThreadedKernel.alarm.cancel(thread))
                 thread.ready();
 		}
 
@@ -81,15 +83,11 @@ public class Condition2 {
 	public void wakeAll() {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
 
-		boolean intStatus = Machine.interrupt().disable();
-
         int len = this.conditionalQueue.size();
 
         while(len-- > 0) {
             wake();
         }
-
-		Machine.interrupt().restore(intStatus);
 	}
 
     /**
@@ -103,26 +101,29 @@ public class Condition2 {
     public void sleepFor(long timeout) {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
 
-        // disable interrupts to make atomic
+        // we need to disable interrupts to make this an atomic operation
+        // kinda hacky but it is what it is
 		boolean intStatus = Machine.interrupt().disable();
 
         KThread currThread = KThread.currentThread();
 
+        // add homie to the queue :)
 		this.conditionalQueue.add(currThread);
 
         // release the lock
-		conditionLock.release();
+		this.conditionLock.release();
 
         // wait in here until woken or waitUntil finishes
 		ThreadedKernel.alarm.waitUntil(timeout);
 
+        // once we wake up remove this bad boy from the queue
 		this.conditionalQueue.remove(currThread);
 
-        // restore interrupts
+        // restore the interrupts! 
 		Machine.interrupt().restore(intStatus);
 
         // reacquire lock before returning
-		conditionLock.acquire();
+		this.conditionLock.acquire();
 	}
 
     private Lock conditionLock;
