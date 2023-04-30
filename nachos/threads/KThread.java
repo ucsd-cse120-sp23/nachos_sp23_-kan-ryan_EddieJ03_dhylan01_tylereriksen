@@ -459,6 +459,22 @@ public class KThread {
 		Lib.assertTrue((child1.status == statusFinished), " Expected child1 to be finished.");
     }
 
+	// Simple test for the situation where the parent is blocked waiting for child to finish
+	private static void joinTest2() {
+		KThread child = new KThread( new Runnable () {
+			public void run() {
+				for (int i = 0; i < 5; i++) {
+					System.out.println ("busy...");
+					Lib.assertTrue((KThread.currentThread().parentThread.status == statusBlocked), "Main thread should be blocked on my mama.");
+					KThread.currentThread().yield();
+				}
+			}
+		});
+		
+		child.setName("child").fork();
+		child.join();
+    }
+
 	/**
 	 * Tests whether this module is working.
 	 */
@@ -468,6 +484,7 @@ public class KThread {
 		new KThread(new PingTest(1)).setName("forked thread").fork();
 		new PingTest(0).run();
 		joinTest1();
+		joinTest2();
 	}
 
 	private static final char dbgThread = 't';
