@@ -53,6 +53,7 @@ public class ThreadedKernel extends Kernel {
 		Condition2.selfTest();
 		Rendezvous.selfTest();
 		// GameMatch.selfTest();
+		Future.selfTest();
 		// if (Machine.bank() != null) {
 		// 	ElevatorBank.selfTest();
 		// }
