@@ -50,10 +50,10 @@ public class Condition2 {
 		// sleep the current thread AFTER release
 		KThread.sleep();
 
-		Machine.interrupt().restore(intStatus);
-        
         // reacquire lock before leaving sleep
 		conditionLock.acquire();
+
+		Machine.interrupt().restore(intStatus);
 	}
 
 	/**
@@ -85,6 +85,7 @@ public class Condition2 {
 
         int len = this.conditionalQueue.size();
 
+        // wake up all threads
         while(len-- > 0) {
             wake();
         }
