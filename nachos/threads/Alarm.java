@@ -31,7 +31,6 @@ public class Alarm {
 	 * should be run.
 	 */
 	public void timerInterrupt() {
-		// current interrupt time
 		long time = Machine.timer().getTime();
 
 		while (waitingQueue.peek() != null && 
@@ -41,7 +40,6 @@ public class Alarm {
 			Machine.interrupt().restore(intStatus);
 		}
 
-		// cause current thread to yield
 		KThread.yield();		
 	}
 
@@ -129,9 +127,23 @@ public class Alarm {
 
     // Implement more test methods here ...
 
+	// test waitUntil edge cases
+	public static void alarmTest2() {
+		int durations[] = {-1000, -10*1000, 0};
+		long t0, t1;
+
+		for (int d : durations) {
+			t0 = Machine.timer().getTime();
+			ThreadedKernel.alarm.waitUntil(d);
+			t1 = Machine.timer().getTime();
+			System.out.println("alarmTest1: waited for " + (t1 - t0) + " ticks");
+		}
+    }
+
     // Invoke Alarm.selfTest() from ThreadedKernel.selfTest()
     public static void selfTest() {
 		alarmTest1();
 		// Invoke your other test methods here ...
+		alarmTest2();
     }
 }
