@@ -198,6 +198,88 @@ public class Condition2 {
 		lock.release();
 	}
 
+    // write test to sleepFor then get woken b4 
+
+    // write a test to wake on thread then two more
+    private static void cvTest3() {
+        System.out.println("\nStarting cvtest3\n");
+        final Lock lock = new Lock();
+        final Condition2 cv = new Condition2(lock);
+
+        KThread t1 = new KThread(
+            new Runnable() {
+                public void run() {
+                    lock.acquire();
+                    cv.sleep();
+                    System.out.println("thread1");
+                    lock.release();
+                }
+            }
+        );
+
+        KThread t2 = new KThread(
+            new Runnable() {
+                public void run() {
+                    lock.acquire();
+                    cv.sleep();
+                    System.out.println("thread2");
+                    lock.release();
+                }
+            }
+        );
+
+        KThread t3 = new KThread(
+            new Runnable() {
+                public void run() {
+                    lock.acquire();
+                    cv.sleep();
+                    System.out.println("thread3");
+                    lock.release();
+                }
+            }
+        );
+
+        t1.fork();
+        t2.fork();
+        t3.fork();
+
+        for(int i = 0; i < 3; i++) {
+            System.out.println("YIELD MAIN");
+            KThread.currentThread().yield();
+        }
+
+        lock.acquire();
+        cv.wake();
+        System.out.println("ONLY ONE THREAD RUNNING");
+        lock.release();
+
+        KThread.currentThread().yield();
+
+        lock.acquire();
+        cv.wakeAll();
+        lock.release();
+        
+        System.out.println("REMAINING THREADS RUNNING");
+
+        t1.join();
+        t2.join();
+        t3.join();
+
+        System.out.println("Finish cvtest3\n");
+    }
+
+    // wake and wakeAll on no blocked threads does nothing
+    private static void cvTest4() {
+        System.out.println("starting cvtest4");
+        final Lock lock = new Lock();
+        final Condition2 cv = new Condition2(lock);
+        lock.acquire();
+        cv.wake();
+        cv.wakeAll();
+        lock.release();
+        System.out.println("Finishing cvtest4");
+    }
+
 	// Place Condition2 test code inside of the Condition2 class.
 
     // Test programs should have exactly the same behavior with the
@@ -266,6 +348,8 @@ public class Condition2 {
     public static void selfTest() {
         new InterlockTest();
 		sleepForTest1();
+        cvTest3();
+        cvTest4();
 		cvTest5();
     }
 }
