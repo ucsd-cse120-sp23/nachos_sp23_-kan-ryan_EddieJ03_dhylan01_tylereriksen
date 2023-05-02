@@ -199,6 +199,39 @@ public class Condition2 {
 	}
 
     // write test to sleepFor then get woken b4 
+    private static void cvTest2() {
+        System.out.println("\nStarting cvtest2\n");
+        final Lock lock = new Lock();
+        final Condition2 cv = new Condition2(lock);
+
+        KThread t1 = new KThread(
+            new Runnable() {
+                public void run() {
+                    lock.acquire();
+                    cv.sleepFor(100000);
+                    System.out.println("thread1");
+                    lock.release();
+                }
+            }
+        );
+
+        t1.fork();
+
+        for(int i = 0; i < 3; i++) {
+            System.out.println("main busy wait...");
+            KThread.currentThread().yield();
+        }
+
+        lock.acquire();
+        cv.wake();
+        lock.release();
+
+        KThread.currentThread().yield();
+
+        System.out.println("main prints after thread1");
+
+        System.out.println("cvtest2 done\n");
+    }
 
     // write a test to wake on thread then two more
     private static void cvTest3() {
@@ -348,6 +381,7 @@ public class Condition2 {
     public static void selfTest() {
         new InterlockTest();
 		sleepForTest1();
+        cvTest2();
         cvTest3();
         cvTest4();
 		cvTest5();
