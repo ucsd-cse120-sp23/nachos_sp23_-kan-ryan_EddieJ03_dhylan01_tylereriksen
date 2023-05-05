@@ -374,6 +374,39 @@ public class UserProcess {
 		return 0;
 	}
 
+	private int handleExec(int virtualAdress, int argc, int argv) {
+		return -1;
+	}
+
+	private int handleJoin(int pid, int status) {
+		return -1;	
+	}
+
+
+	private int handleCreate(int virtualAddress) {
+		return -1;	
+	}
+
+	private int handleOpen(int virtualAddress) {
+		return -1;	
+	}
+
+	private int handleRead(int fileDescriptor, int buffer, int size) {
+		return -1;	
+	}
+
+	private int handleWrite(int fileDescriptor, int buffer, int size) {
+		return -1;	
+	}
+
+	private int handleClose(int fileDescriptor) {
+		return -1;	
+	}
+
+	private int handleUnlink(int virtualAddress) {
+		return -1;	
+	}
+
 	private static final int syscallHalt = 0, syscallExit = 1, syscallExec = 2,
 			syscallJoin = 3, syscallCreate = 4, syscallOpen = 5,
 			syscallRead = 6, syscallWrite = 7, syscallClose = 8,
@@ -442,14 +475,29 @@ public class UserProcess {
 	 */
 	public int handleSyscall(int syscall, int a0, int a1, int a2, int a3) {
 		switch (syscall) {
-		case syscallHalt:
-			return handleHalt();
-		case syscallExit:
-			return handleExit(a0);
-
-		default:
-			Lib.debug(dbgProcess, "Unknown syscall " + syscall);
-			Lib.assertNotReached("Unknown system call!");
+			case syscallHalt:
+				return handleHalt();
+			case syscallExit:
+				return handleExit(a0);
+			case syscallExec:
+				return handleExec(a0, a1, a2);
+			case syscallJoin:
+				return handleJoin(a0, a1);
+			case syscallCreate:
+				return handleCreate(a0);
+			case syscallOpen:
+				return handleOpen(a0);
+			case syscallRead:
+				return handleRead(a0, a1, a2);
+			case syscallWrite:
+				return handleWrite(a0, a1, a2);
+			case syscallClose:
+				return handleClose(a0);
+			case syscallUnlink:
+				return handleUnlink(a0);
+			default:
+				Lib.debug(dbgProcess, "Unknown syscall " + syscall);
+				Lib.assertNotReached("Unknown system call!");
 		}
 		return 0;
 	}
