@@ -28,6 +28,10 @@ public class UserProcess {
 		pageTable = new TranslationEntry[numPhysPages];
 		for (int i = 0; i < numPhysPages; i++)
 			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+
+		fdTable = new OpenFile[16];
+		fdTable[0] = UserKernel.console.openForReading();
+		fdTable[1] = UserKernel.console.openForWriting();
 	}
 
 	/**
@@ -400,7 +404,16 @@ public class UserProcess {
 	}
 
 	private int handleClose(int fileDescriptor) {
-		return -1;	
+		if (fileDescriptor < 0 || fileDescriptor >= fdTable.length || fdTable[fileDescriptor] == null) { 
+			return -1; 
+		}
+
+		OpenFile fileToClose = fdTable[fileDescriptor];
+		fileToClose.close();
+
+		fdTable[fileDescriptor] = null;
+
+		return 0;	
 	}
 
 	private int handleUnlink(int virtualAddress) {
@@ -454,7 +467,7 @@ public class UserProcess {
 	 * <tr>
 	 * <td>7</td>
 	 * <td><tt>int  write(int fd, char *buffer, int size);
-	 * 								</tt></td>
+	 * 								</tt></fileDescriptorTable>
 	 * </tr>
 	 * <tr>
 	 * <td>8</td>
@@ -535,6 +548,8 @@ public class UserProcess {
 
 	/** This process's page table. */
 	protected TranslationEntry[] pageTable;
+
+	protected OpenFile[] fdTable;
 
 	/** The number of contiguous pages occupied by the program. */
 	protected int numPages;
