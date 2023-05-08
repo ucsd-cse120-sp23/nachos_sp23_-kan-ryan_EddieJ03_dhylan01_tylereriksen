@@ -388,21 +388,59 @@ public class UserProcess {
 
 
 	private int handleCreate(int virtualAddress) {
+		String name = readVirtualMemoryString(virtualAddress, 256);
+
+		if(name != null && name.length() <= 256) {
+			OpenFile file = UserKernel.fileSystem.open(name, true);
+
+			if (file != null) {
+				int i = 2;
+
+				while(i < 16) {
+					if (fdTable[i] == null) {
+						fdTable[i] = file;
+						return i;
+					}
+
+					i++;
+				}
+			}
+		}
+
 		return -1;	
 	}
 
 	private int handleOpen(int virtualAddress) {
-		return -1;	
+		String name = readVirtualMemoryString(virtualAddress, 256);
+
+		if(name != null && name.length() <= 256) {
+			OpenFile file = UserKernel.fileSystem.open(name, false);
+
+			if (file != null) {
+				int i = 2;
+
+				while(i < 16) {
+					if (fdTable[i] == null) {
+						fdTable[i] = file;
+						return i;
+					}
+
+					i++;
+				}
+			}
+		}
+
+		return -1;
 	}
 
 	private int handleRead(int fileDescriptor, int buffer, int size) {
-		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] == null && size >= 0) { 
+		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] != null && size >= 0) { 
 			byte[] local = new byte[size];
 
 			int result = fdTable[fileDescriptor].read(local, 0, size);
 
-			if (result != -1) { 
-				// write it to virtual stream
+			if (result != -1 && result <= size) { 
+				// write it to virtual mem
 				return writeVirtualMemory(buffer, local, 0, result);
 			}
 		}
@@ -411,19 +449,15 @@ public class UserProcess {
 	}
 
 	private int handleWrite(int fileDescriptor, int buffer, int size) {
-		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] == null && size >= 0) { 
+		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] != null && size >= 0) { 
 			byte[] local = new byte[size];
 
-			if (readVirtualMemory(buffer, local) < size) { 
-				return -1; 
-			}
+			if (readVirtualMemory(buffer, local) == size) { 
+				int result = fdTable[fileDescriptor].write(local, 0, size);
 
-			int result = fdTable[fileDescriptor].write(local, 0, size);
-
-			if (result == size) {
-				return result;
-			} else {
-				return -1;
+				if (result == size) {
+					return result;
+				}
 			}
 		}
 
@@ -431,7 +465,7 @@ public class UserProcess {
 	}
 
 	private int handleClose(int fileDescriptor) {
-		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] == null) {
+		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] != null) {
 			OpenFile fileToClose = fdTable[fileDescriptor];
 			fileToClose.close();
 
@@ -446,7 +480,7 @@ public class UserProcess {
 	private int handleUnlink(int virtualAddress) {
 		String name = readVirtualMemoryString(virtualAddress, 256);
 
-		return (name != null && name.length() < 256 && UserKernel.fileSystem.remove(name)) ? 0 : -1;
+		return (name != null && name.length() <= 256 && UserKernel.fileSystem.remove(name)) ? 0 : -1;
 	}
 
 	private static final int syscallHalt = 0, syscallExit = 1, syscallExec = 2,
