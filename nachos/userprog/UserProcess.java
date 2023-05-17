@@ -27,14 +27,17 @@ public class UserProcess {
 	 */
 	public UserProcess() {
 		this.fdTable = new OpenFile[16];
-		this.fdTable[0] = UserKernel.console.openForReading();
-		this.fdTable[1] = UserKernel.console.openForWriting();
-		this.childMap = new HashMap<>();
-		this.childMapLock = new Lock();
 
 		this.processNumber = UserKernel.nextPID();
 
 		UserKernel.incrementProcessCount();
+
+		this.fdTable[0] = UserKernel.console.openForReading();
+		this.fdTable[1] = UserKernel.console.openForWriting();
+		this.exitStatuses = new HashMap<>();
+		this.childList = new ArrayList<>();
+		this.mapLock = new Lock();
+		status = null;
 	}
 
 	/**
@@ -379,22 +382,17 @@ public class UserProcess {
 			return false;
 		}
 
+		UserKernel.freePPNLock.acquire();
+
 		this.pageTable = new TranslationEntry[numPages];
 
 		for (int i = 0; i < numPages; i++) {
 			int ppn = UserKernel.acquirePPN();
 
-			if(ppn == -1) {
-				// release previously acquired physical pages
-				for (int j = 0; j < i; j++) {
-					UserKernel.releasePPN(pageTable[j].ppn);
-				}
-
-				return false;
-			}
-
 			pageTable[i] = new TranslationEntry(i, ppn, true, false, false, false);
 		}
+
+		UserKernel.freePPNLock.release();
 
 		// load sections
 
@@ -436,6 +434,7 @@ public class UserProcess {
 	 * Release any resources allocated by <tt>loadSections()</tt>.
 	 */
 	protected void unloadSections() {
+		UserKernel.freePPNLock.acquire();
 		for (int i = 0; i < pageTable.length; i++) {
 			TranslationEntry entry = pageTable[i];
 
@@ -446,6 +445,7 @@ public class UserProcess {
 			UserKernel.releasePPN(entry.ppn);
 			pageTable[i] = null;
 		}
+		UserKernel.freePPNLock.release();
 	}
 
 	/**
@@ -488,131 +488,149 @@ public class UserProcess {
 	/**
 	 * Handle the exit() system call.
 	 */
-	private int handleExit(int status) {
-	    // Do not remove this call to the autoGrader...
+
+	private int handleExit(int status){
+		// Do not remove this call to the autoGrader...
 		Machine.autoGrader().finishingCurrentProcess(status);
 		// ...and leave it as the top of handleExit so that we
 		// can grade your implementation.
 
 		Lib.debug(dbgProcess, "UserProcess.handleExit (" + status + ")");
 
-		for (int i = 2; i < fdTable.length; i++) {
+		if (parentProcess != null)
+		{
+			parentProcess.mapLock.acquire();
+			parentProcess.exitStatuses.put(processNumber, status);
+			parentProcess.mapLock.release();
+		}
+		
+		this.unloadSections();
+
+		for (int i = 0; i < fdTable.length; i++) {
 			if (fdTable[i] != null) {
 				handleClose(i);
 			}
 		}
 
-		for (UserProcess child : childMap.values()) {
-			child.parentProcess = null;
+		ListIterator<UserProcess> iter = childList.listIterator();
+		while(iter.hasNext()) {
+			iter.next().parentProcess = null;
+		}
+		childList.clear();
+		if (this.processNumber == 0) {
+			Kernel.kernel.terminate(); //root exiting
+		} else {
+			KThread.finish();
 		}
 
-		unloadSections();
-
-		coff.close();
-
-		this.status = status;
-
-		UserKernel.decrementProcessCount();
-
-		if (UserKernel.processCount == 0) {
-			Kernel.kernel.terminate();
-		}
-
-		// finish the current thread
-		// will wake up parent thread in implementation in KThread
-		UThread.currentThread().finish();
-
-		return 0;
+		return status;
 	}
 
-	private int handleExec(int virtualAddress, int argc, int argv) {
-		// argc must be non-negative
-		if (virtualAddress >= 0 && virtualAddress < pageSize * numPages && argv >= 0 && argv < pageSize * numPages && argc >= 0) {
-			String name = readVirtualMemoryString(virtualAddress, 256);
+	private int handleExec(int fileNameVaddr, int numArg, int argOffset){
+		// Check fileNameVaddr
+		if (fileNameVaddr<0){
+			Lib.debug(dbgProcess, "Invalid name vaddr");
+			return -1;
+		}
+		// Check string filename
+		String filename = readVirtualMemoryString(fileNameVaddr, 256);
+		if (filename == null){
+			Lib.debug(dbgProcess, "Invalid file name");
+			return -1;
+		}
+		String[] filenameArray = filename.split("\\.");
+		String last = filenameArray[filenameArray.length - 1];
+		if (!last.toLowerCase().equals("coff")){
+			Lib.debug(dbgProcess, "File name must end with 'coff'");
+			return -1;
+		}
 
-			// this string must include the ".coff" extension
-			if (name != null && name.length() > 0 && name.endsWith(".coff")) {
-				// get the arguments address
-				// each pointer has 4 type, use readvirtualmemory() and track the current vaddr
+		// Check arguments
+		if (numArg < 0){
+			Lib.debug(dbgProcess, "Cannot take negative number of arguments");
+			return -1;
+		}
+		String[] arguments = new String[numArg];
 
-				String[] arguments = new String[argc];
+		for(int i=0; i < numArg; i++ ){
+			byte[] pointer = new byte[4];
+			int byteRead = readVirtualMemory(argOffset + (i*4), pointer);
+			// check pointer
+			if (byteRead != 4){
+				Lib.debug(dbgProcess, "Pointers are not read correctly");
+				return -1;
+			}
+			int argVaddr = Lib.bytesToInt(pointer, 0);
+			String argument = readVirtualMemoryString(argVaddr, 256);
+			// check argument
+			if (argument == null){
+				Lib.debug(dbgProcess, "One or more argument is not read");
+				return -1;
+			}
+			arguments[i] = argument;
+		}
 
-				int i = 0;
+		UserProcess child = new UserProcess();
+		if (child.execute(filename, arguments)) {
+			System.out.println("adding to childList, current size of list is: " + children);
+			this.childList.add(child);
+			children++;
+			System.out.println("added to childList, size of list is now: " + children);
+			child.parentProcess = this;
+			return child.processNumber;
+		}else{
+			Lib.debug(dbgProcess, "Cannot execute the problem");
+			return -1;
+		} 	
+	}
 
-				while (i < argc) {
-					byte[] buffer = new byte[4];
+	private int handleJoin(int processID, int statusAddr){
+		System.out.println("inside join");
+		UserProcess child = null;
+		int children = this.childList.size();
 
-					// read in address (argv contains pointers)
-					int readCount = readVirtualMemory(argv + i * 4, buffer);
-
-					// read in 4 bytes (if not there was an issue)
-					if (readCount == 4) {
-						arguments[i++] = readVirtualMemoryString(Lib.bytesToInt(buffer, 0), 256);
-
-						if (arguments[i-1] == null) {
-							return -1;
-						}
-					} else {
-						return -1;
-					}
-				}
-
-				System.out.println("inside handleExec of parent");
-
-				// create child process
-				UserProcess child = new UserProcess();
-
-				if (child.execute(name, arguments)) {
-					child.parentProcess = this;
-
-					this.childMapLock.acquire();
-					this.childMap.put(child.processNumber, child);
-					System.out.println("line 570: " + this.childMap.size());
-					this.childMapLock.release();
-
-					return child.processNumber;
-				}
+		//find process represented by processID
+		for(int i = 0; i < children; i++) {
+			if(this.childList.get(i).processNumber == processID) {
+				child = this.childList.get(i);
+				break;
 			}
 		}
 
-		return -1;
-	}
-
-	private int handleJoin(int pid, int status) {
-		System.out.println("in handleJoin " + pid);
-		 if (pid >= 0 && status >= 0 && status < pageSize * numPages) {
-			this.childMapLock.acquire();
-			UserProcess child = childMap.getOrDefault(pid, null);
-			this.childMapLock.release();
-
-			System.out.println("inside join, size: "+ childMap.size());
-
-			if (child != null) {
-				// wait for child thread to finish
-				child.thread.join();
-
-				// remove from map
-				this.childMapLock.acquire();
-				this.childMap.remove(pid);
-				this.childMapLock.release();
-
-				// child exited normally
-				if(child.status != null) {
-					byte[] statusBytes;
-					statusBytes = Lib.bytesFromInt(child.status);
-
-					if (writeVirtualMemory(status, statusBytes) == 4) {
-						return 1;
-					} else {
-						return 0;
-					}
-                } else { // child did not exit normally
-					return 0;
-				}
-			}
+		//processID doesn't represent a child of this process
+		if(child == null) {
+			return -1;
 		}
 
-		return -1;
+		// if child thread status = finished, join will return immediately
+		child.thread.join();
+
+		//disown child
+		System.out.println("removing child");
+		this.childList.remove(child);
+		System.out.println("child removed");
+		child.parentProcess = null;
+
+		mapLock.acquire();
+		Integer status = exitStatuses.get(child.processNumber);
+		mapLock.release();
+		
+		if(status == -9999){
+			return 0; // unhandle exception
+		}
+		//check child's status, to see what to return
+		if(status != null) {
+			byte[] buffer = new byte[4];
+			Lib.bytesFromInt(buffer, 0, status);
+			int bytesWritten = writeVirtualMemory(statusAddr, buffer);
+			if (bytesWritten == 4){
+				return 1; //child exited normally
+			}else{
+				return 0;
+			}
+		} else {
+			return 0; //something went horribly wrong
+		}
 	}
 
 	private int handleCreate(int virtualAddress) {
@@ -669,8 +687,6 @@ public class UserProcess {
 			&& buffer >= 0 && buffer < virtualAddressEnd) { 
 			int firstVirtualPage = Processor.pageFromAddress(buffer);
 			int lastVirtualPage = Processor.pageFromAddress(buffer + size);
-
-			// System.out.println(firstVirtualPage+","+lastVirtualPage+","+pageTable.length);
 
 			while (firstVirtualPage <= lastVirtualPage) {
 				if (!pageTable[firstVirtualPage].valid || pageTable[firstVirtualPage].readOnly) {
@@ -904,11 +920,15 @@ public class UserProcess {
 	private int processNumber;
 
 	// TODO: protect with lock
-	private static HashMap<Integer, UserProcess> childMap;
+	private static List<UserProcess> childList;
 
-	private Lock childMapLock;
+	private static HashMap<Integer,Integer> exitStatuses;
+
+	private Lock mapLock;
 
 	private Integer status;
 
 	private UserProcess parentProcess;
+
+	private int children = 0;
 }
