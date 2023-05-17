@@ -211,11 +211,15 @@ public class UserProcess {
 
 		// copy everything we can until we exceed last virtual page allocated for this process
 		while (currentVirtualPage < pageTable.length && currentVirtualPage <= endVirtualPage) {
-			if (!pageTable[currentVirtualPage].valid)
+			if (!pageTable[currentVirtualPage].valid) {
+				System.out.println("invalid");
 				break; 
+			}
 
-			if (!read && pageTable[currentVirtualPage].readOnly)
+			if (!read && pageTable[currentVirtualPage].readOnly) {
+				System.out.println("readOnly");
 				break;
+			}
 			
 			int currentPageVAStart = currentVirtualPage * pageSize;
 			int currentPageVAEnd = currentPageVAStart + pageSize-1;
@@ -704,13 +708,6 @@ public class UserProcess {
 				// write it to virtual mem
 				// check when return is 0
 				int res = writeVirtualMemory(buffer, local, 0, result);
-				if(res == 0) {
-					if(size == 0) {
-						return 0;
-					} else {
-						return -1;
-					}
-				}
 				return result;
 			}
 		}
