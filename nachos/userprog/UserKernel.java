@@ -136,24 +136,17 @@ public class UserKernel extends ThreadedKernel {
 	}
 
 	public static int acquirePPN() {
-		freePPNLock.acquire();
+		//freePPNLock.acquire();
 
-		if (freePPN.isEmpty()) {
-			freePPNLock.release();
-			return -1;
-		} else {
-			int ppn = freePPN.pollFirst();
-			freePPNLock.release();
-			return ppn;
-		}
+		return freePPN.pollFirst();
 	}
 
 	public static void releasePPN(int physicalPageNumber) {
-		freePPNLock.acquire();
+		//freePPNLock.acquire();
 
 		freePPN.add(physicalPageNumber);
 
-		freePPNLock.release();
+		//freePPNLock.release();
 	}
 
 	public static void incrementProcessCount() {
@@ -184,7 +177,7 @@ public class UserKernel extends ThreadedKernel {
 	// free pages
 	private static LinkedList<Integer> freePPN;
 
-	private static Lock freePPNLock;
+	public static Lock freePPNLock;
 
 	private static Lock processLock;
 
