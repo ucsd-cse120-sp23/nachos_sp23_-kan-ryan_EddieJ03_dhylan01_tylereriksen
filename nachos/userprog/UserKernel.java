@@ -24,6 +24,14 @@ public class UserKernel extends ThreadedKernel {
 	public void initialize(String[] args) {
 		super.initialize(args);
 
+		freePPNLock = new Lock();
+
+		processLock = new Lock();
+
+		pidLock = new Lock();
+
+		freePPN = new LinkedList<>();
+
 		console = new SynchConsole(Machine.console());
 
 		Machine.processor().setExceptionHandler(new Runnable() {
@@ -35,7 +43,7 @@ public class UserKernel extends ThreadedKernel {
 		int physicalPageCount = Machine.processor().getNumPhysPages();
 
 		for (int i = 0; i < physicalPageCount; i++) {
-			this.freePPN.add(i);
+			freePPN.add(i);
 		}
 	}
 
@@ -127,25 +135,44 @@ public class UserKernel extends ThreadedKernel {
 		super.terminate();
 	}
 
-	public int acquirePPN() {
-		this.lock.acquire();
+	public static int acquirePPN() {
+		freePPNLock.acquire();
 
-		if (this.freePPN.isEmpty()) {
-			this.lock.release();
+		if (freePPN.isEmpty()) {
+			freePPNLock.release();
 			return -1;
 		} else {
 			int ppn = freePPN.pollFirst();
-			this.lock.release();
+			freePPNLock.release();
 			return ppn;
 		}
 	}
 
-	public void releasePPN(int physicalPageNumber) {
-		this.lock.acquire();
+	public static void releasePPN(int physicalPageNumber) {
+		freePPNLock.acquire();
 
-		this.freePPN.add(physicalPageNumber);
+		freePPN.add(physicalPageNumber);
 
-		this.lock.release();
+		freePPNLock.release();
+	}
+
+	public static void incrementProcessCount() {
+		processLock.acquire();		
+		processCount++;
+		processLock.release();
+	}
+
+	public static void decrementProcessCount() {
+		processLock.acquire();
+		processCount--;
+		processLock.release();
+	}
+
+	public static int nextPID() {
+		boolean status = Machine.interrupt().disable();
+		int pid = processNumber++;
+		Machine.interrupt().restore(status);
+		return pid;
 	}
 
 	/** Globally accessible reference to the synchronized console. */
@@ -155,8 +182,15 @@ public class UserKernel extends ThreadedKernel {
 	private static Coff dummy1 = null;
 
 	// free pages
-	LinkedList<Integer> freePPN = new LinkedList<>();
+	private static LinkedList<Integer> freePPN;
 
-	// lock
-	Lock lock = new Lock();
+	private static Lock freePPNLock;
+
+	private static Lock processLock;
+
+	private static Lock pidLock;
+
+	static int processNumber = 0;
+
+	static int processCount = 0;
 }
