@@ -34,10 +34,10 @@ public class UserProcess {
 
 		this.fdTable[0] = UserKernel.console.openForReading();
 		this.fdTable[1] = UserKernel.console.openForWriting();
-		this.exitStatuses = new HashMap<>();
-		this.childList = new ArrayList<>();
-		this.mapLock = new Lock();
+		this.childMap = new HashMap<>();
+		this.childMapLock = new Lock();
 		status = null;
+		abnormal = false;
 	}
 
 	/**
@@ -212,12 +212,11 @@ public class UserProcess {
 		// copy everything we can until we exceed last virtual page allocated for this process
 		while (currentVirtualPage < pageTable.length && currentVirtualPage <= endVirtualPage) {
 			if (!pageTable[currentVirtualPage].valid) {
-				System.out.println("invalid");
 				break; 
 			}
 
 			if (!read && pageTable[currentVirtualPage].readOnly) {
-				System.out.println("readOnly");
+				
 				break;
 			}
 			
@@ -402,8 +401,6 @@ public class UserProcess {
 
 		int numCoffSections = this.coff.getNumSections();
 
-		boolean isSuccessful = true;
-
 		for (int s = 0; s < numCoffSections; s++) {
 			CoffSection section = this.coff.getSection(s);
 
@@ -413,25 +410,16 @@ public class UserProcess {
 			for (int i = 0; i < section.getLength(); i++) {
 				int vpn = section.getFirstVPN() + i;
 				// System.out.println("412:" + vpn);
-
-				if (pageTable[vpn] != null) { 
-					pageTable[vpn].readOnly = section.isReadOnly();
-					section.loadPage(i, pageTable[vpn].ppn);
-				} else {
-					isSuccessful = false;
-					break;
-				}
+				pageTable[vpn].readOnly = section.isReadOnly();
+				section.loadPage(i, pageTable[vpn].ppn);
 			}
-
-			if (!isSuccessful)
-				break;
 		}
 
 		// for(TranslationEntry te : pageTable) {
 		// 	System.out.println(te.readOnly);
 		// }
 
-		return isSuccessful;
+		return true;
 	}
 
 	/**
@@ -493,7 +481,7 @@ public class UserProcess {
 	 * Handle the exit() system call.
 	 */
 
-	private int handleExit(int status){
+	private int handleExit(int status) {
 		// Do not remove this call to the autoGrader...
 		Machine.autoGrader().finishingCurrentProcess(status);
 		// ...and leave it as the top of handleExit so that we
@@ -501,140 +489,121 @@ public class UserProcess {
 
 		Lib.debug(dbgProcess, "UserProcess.handleExit (" + status + ")");
 
-		if (parentProcess != null)
-		{
-			parentProcess.mapLock.acquire();
-			parentProcess.exitStatuses.put(processNumber, status);
-			parentProcess.mapLock.release();
-		}
-		
-		this.unloadSections();
-
 		for (int i = 0; i < fdTable.length; i++) {
 			if (fdTable[i] != null) {
 				handleClose(i);
 			}
 		}
 
-		ListIterator<UserProcess> iter = childList.listIterator();
-		while(iter.hasNext()) {
-			iter.next().parentProcess = null;
-		}
-		childList.clear();
-		if (this.processNumber == 0) {
-			Kernel.kernel.terminate(); //root exiting
-		} else {
-			KThread.finish();
+		for (UserProcess child : childMap.values()) {
+			child.parentProcess = null;
 		}
 
-		return status;
+		unloadSections();
+
+		coff.close();
+
+		this.status = status;
+
+		UserKernel.decrementProcessCount();
+
+		if (UserKernel.processCount == 0) {
+			Kernel.kernel.terminate();
+		}
+
+		// finish the current thread
+		// will wake up parent thread in implementation in KThread
+		UThread.currentThread().finish();
+
+		return 0;
 	}
 
-	private int handleExec(int fileNameVaddr, int numArg, int argOffset){
-		// Check fileNameVaddr
-		if (fileNameVaddr<0){
-			Lib.debug(dbgProcess, "Invalid name vaddr");
-			return -1;
-		}
-		// Check string filename
-		String filename = readVirtualMemoryString(fileNameVaddr, 256);
-		if (filename == null){
-			Lib.debug(dbgProcess, "Invalid file name");
-			return -1;
-		}
-		String[] filenameArray = filename.split("\\.");
-		String last = filenameArray[filenameArray.length - 1];
-		if (!last.toLowerCase().equals("coff")){
-			Lib.debug(dbgProcess, "File name must end with 'coff'");
-			return -1;
-		}
+	private int handleExec(int virtualAddress, int argc, int argv) {
+		// argc must be non-negative
+		if (virtualAddress >= 0 && virtualAddress < pageSize * numPages && argv >= 0 && argv < pageSize * numPages && argc >= 0) {
+			String name = readVirtualMemoryString(virtualAddress, 256);
 
-		// Check arguments
-		if (numArg < 0){
-			Lib.debug(dbgProcess, "Cannot take negative number of arguments");
-			return -1;
-		}
-		String[] arguments = new String[numArg];
+			// this string must include the ".coff" extension
+			if (name != null && name.length() > 0 && name.endsWith(".coff")) {
+				// get the arguments address
+				// each pointer has 4 type, use readvirtualmemory() and track the current vaddr
 
-		for(int i=0; i < numArg; i++ ){
-			byte[] pointer = new byte[4];
-			int byteRead = readVirtualMemory(argOffset + (i*4), pointer);
-			// check pointer
-			if (byteRead != 4){
-				Lib.debug(dbgProcess, "Pointers are not read correctly");
-				return -1;
+				String[] arguments = new String[argc];
+
+				int i = 0;
+
+				while (i < argc) {
+					byte[] buffer = new byte[4];
+
+					// read in address (argv contains pointers)
+					int readCount = readVirtualMemory(argv + i * 4, buffer);
+
+					// read in 4 bytes (if not there was an issue)
+					if (readCount == 4) {
+						arguments[i++] = readVirtualMemoryString(Lib.bytesToInt(buffer, 0), 256);
+
+						if (arguments[i-1] == null) {
+							return -1;
+						}
+					} else {
+						return -1;
+					}
+				}
+
+				// create child process
+				UserProcess child = new UserProcess();
+
+				if (child.execute(name, arguments)) {
+					child.parentProcess = this;
+
+					this.childMapLock.acquire();
+					this.childMap.put(child.processNumber, child);
+					this.childMapLock.release();
+
+					return child.processNumber;
+				} else {
+					UserKernel.decrementProcessCount();
+				}
 			}
-			int argVaddr = Lib.bytesToInt(pointer, 0);
-			String argument = readVirtualMemoryString(argVaddr, 256);
-			// check argument
-			if (argument == null){
-				Lib.debug(dbgProcess, "One or more argument is not read");
-				return -1;
-			}
-			arguments[i] = argument;
 		}
 
-		UserProcess child = new UserProcess();
-		if (child.execute(filename, arguments)) {
-			System.out.println("adding to childList, current size of list is: " + children);
-			this.childList.add(child);
-			children++;
-			System.out.println("added to childList, size of list is now: " + children);
-			child.parentProcess = this;
-			return child.processNumber;
-		}else{
-			Lib.debug(dbgProcess, "Cannot execute the problem");
-			return -1;
-		} 	
+		return -1;
 	}
 
-	private int handleJoin(int processID, int statusAddr){
-		System.out.println("inside join");
-		UserProcess child = null;
-		int children = this.childList.size();
+	private int handleJoin(int pid, int status) {
+		 if (pid >= 0 && status >= 0 && status < pageSize * numPages) {
+			this.childMapLock.acquire();
+			UserProcess child = childMap.getOrDefault(pid, null);
+			this.childMapLock.release();
 
-		//find process represented by processID
-		for(int i = 0; i < children; i++) {
-			if(this.childList.get(i).processNumber == processID) {
-				child = this.childList.get(i);
-				break;
+			System.out.println("inside join, size: "+ childMap.size());
+
+			if (child != null) {
+				// wait for child thread to finish
+				child.thread.join();
+
+				// remove from map
+				this.childMapLock.acquire();
+				this.childMap.remove(pid);
+				this.childMapLock.release();
+
+				// child exited normally
+				if(!child.abnormal) {
+					byte[] statusBytes;
+					statusBytes = Lib.bytesFromInt(child.status);
+
+					if (writeVirtualMemory(status, statusBytes) == 4) {
+						return 1;
+					} else {
+						return 0;
+					}
+                } else { // child did not exit normally
+					return 0;
+				}
 			}
 		}
 
-		//processID doesn't represent a child of this process
-		if(child == null) {
-			return -1;
-		}
-
-		// if child thread status = finished, join will return immediately
-		child.thread.join();
-
-		//disown child
-		System.out.println("removing child");
-		this.childList.remove(child);
-		System.out.println("child removed");
-		child.parentProcess = null;
-
-		mapLock.acquire();
-		Integer status = exitStatuses.get(child.processNumber);
-		mapLock.release();
-		
-		if(status == -9999){
-			return 0; // unhandle exception
-		}
-		//check child's status, to see what to return
-		if(status != null) {
-			byte[] buffer = new byte[4];
-			Lib.bytesFromInt(buffer, 0, status);
-			int bytesWritten = writeVirtualMemory(statusAddr, buffer);
-			if (bytesWritten == 4){
-				return 1; //child exited normally
-			}else{
-				return 0;
-			}
-		} else {
-			return 0; //something went horribly wrong
-		}
+		return -1;
 	}
 
 	private int handleCreate(int virtualAddress) {
@@ -693,22 +662,22 @@ public class UserProcess {
 			int lastVirtualPage = Processor.pageFromAddress(buffer + size);
 
 			while (firstVirtualPage <= lastVirtualPage) {
-				if (!pageTable[firstVirtualPage].valid || pageTable[firstVirtualPage].readOnly) {
+				if (lastVirtualPage >= pageTable.length || !pageTable[firstVirtualPage].valid || pageTable[firstVirtualPage].readOnly) {
 					return -1;
 				}
 
+				byte[] local = new byte[size];
+
+				int result = fdTable[fileDescriptor].read(local, 0, size);
+
+				if (result != -1 && result <= size) { 
+					// write it to virtual mem
+					// check when return is 0
+					int res = writeVirtualMemory(buffer, local, 0, result);
+					return res;
+				}
+
 				firstVirtualPage++;
-			}
-
-			byte[] local = new byte[size];
-
-			int result = fdTable[fileDescriptor].read(local, 0, size);
-
-			if (result != -1 && result <= size) { 
-				// write it to virtual mem
-				// check when return is 0
-				int res = writeVirtualMemory(buffer, local, 0, result);
-				return result;
 			}
 		}
 
@@ -882,9 +851,11 @@ public class UserProcess {
 			break;
 
 		default:
+			this.abnormal = true;
+			handleExit(Integer.MIN_VALUE);
 			Lib.debug(dbgProcess, "Unexpected exception: "
 					+ Processor.exceptionNames[cause]);
-			handleExit(-1);
+				
 		}
 	}
 
@@ -917,15 +888,13 @@ public class UserProcess {
 	private int processNumber;
 
 	// TODO: protect with lock
-	private static List<UserProcess> childList;
+	private HashMap<Integer, UserProcess> childMap;
 
-	private static HashMap<Integer,Integer> exitStatuses;
-
-	private Lock mapLock;
+	private Lock childMapLock;
 
 	private Integer status;
 
 	private UserProcess parentProcess;
 
-	private int children = 0;
+	private boolean abnormal;
 }
