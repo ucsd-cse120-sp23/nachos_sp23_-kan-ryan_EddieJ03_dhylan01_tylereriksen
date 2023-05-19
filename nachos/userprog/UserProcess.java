@@ -552,7 +552,7 @@ public class UserProcess {
 	}
 
 	private int handleExec(int virtualAddress, int argc, int argv) {
-		if (virtualAddress >= 0 && virtualAddress < pageSize * numPages && argv >= 0 && argv < pageSize * numPages && argc >= 0 && argc <= 16) {
+		if (virtualAddress >= 0 && virtualAddress < pageSize * numPages && argv >= 0 && argv < pageSize * numPages && argc >= 0 && argc <= 16 && 4*argc+argv<pageSize*numPages) {
 			String name = readVirtualMemoryString(virtualAddress, 256);
 
 			if (name != null && name.length() > 0 && name.endsWith(".coff")) {
