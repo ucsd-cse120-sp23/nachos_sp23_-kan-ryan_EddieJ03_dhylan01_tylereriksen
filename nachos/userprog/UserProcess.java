@@ -196,14 +196,26 @@ public class UserProcess {
 		return transfer(vaddr, data, offset, length, false);
 	}
 
+	/**
+	 * Helper method to actually do transfer needed for read/writeVirtualMemory
+	 * This took forever to figure out ( T _ T )
+	 * 
+	 * @param virtualAddress the first byte of virtual memory to write.
+	 * @param data the array containing the data to transfer.
+	 * @param offset the first byte to transfer from the array.
+	 * @param length the number of bytes to transfer from the array to virtual
+	 * memory.
+	 * @param read whether this is read or not
+	 * @return the number of bytes successfully transferred.
+	 */
 	private int transfer(int virtualAddress, byte[] data, int offset, int length, boolean read) {
 		byte[] memory = Machine.processor().getMemory();
 
-		int totalBytesTransferred = 0, virtualAddressEnd = this.numPages * pageSize;
+		int transferAmount = 0, virtualAddressEnd = this.numPages * pageSize;
 
 		// not within bounds of process' virtual address space
 		if (virtualAddress < 0 || virtualAddress >= virtualAddressEnd)
-			return totalBytesTransferred;
+			return transferAmount;
 
 		int currentVirtualPage = Machine.processor().pageFromAddress(virtualAddress);
 		int endVirtualPage = Machine.processor().pageFromAddress(virtualAddress+length);
@@ -227,7 +239,7 @@ public class UserProcess {
 			if (virtualAddress > currentPageVAStart && virtualLengthEnd >= currentPageVAEnd) { // this is the first virtual page
 				int addrOffset = Machine.processor().offsetFromAddress(virtualAddress);
 				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn + addrOffset;
-				int dataStart = offset+totalBytesTransferred;
+				int dataStart = offset+transferAmount;
 				int difference = pageSize - addrOffset;
 
 				if (read) {
@@ -236,10 +248,10 @@ public class UserProcess {
 					System.arraycopy(data, dataStart, memory, physicalAddress, difference);
 				}
 
-				totalBytesTransferred = totalBytesTransferred + difference;
+				transferAmount = transferAmount + difference;
 			} else if (virtualAddress <= currentPageVAStart && virtualLengthEnd >= currentPageVAEnd) { // a middle virtual page we encompass entirely
 				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn;
-				int dataStart = offset+totalBytesTransferred;
+				int dataStart = offset+transferAmount;
 
 				if (read) {
 					System.arraycopy(memory, physicalAddress, data, dataStart, pageSize);
@@ -247,10 +259,10 @@ public class UserProcess {
 					System.arraycopy(data, dataStart, memory, physicalAddress, pageSize);
 				}
 
-				totalBytesTransferred = totalBytesTransferred + pageSize;
+				transferAmount = transferAmount + pageSize;
 			} else if (virtualAddress <= currentPageVAStart && virtualLengthEnd < currentPageVAEnd) { // last virtual page
 				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn;
-				int dataStart = offset+totalBytesTransferred;
+				int dataStart = offset+transferAmount;
 				int difference = virtualLengthEnd - currentPageVAStart;
 
 				if (read) {
@@ -259,11 +271,11 @@ public class UserProcess {
 					System.arraycopy(data, dataStart, memory, physicalAddress, difference);
 				}
 
-				totalBytesTransferred = totalBytesTransferred + difference;
+				transferAmount = transferAmount + difference;
 			} else { 
 				int addrOffset = Machine.processor().offsetFromAddress(virtualAddress);
 				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn + addrOffset;
-				int dataStart = offset+totalBytesTransferred;
+				int dataStart = offset+transferAmount;
 
 				if (read) {
 					System.arraycopy(memory, physicalAddress, data, dataStart, length);
@@ -271,7 +283,7 @@ public class UserProcess {
 					System.arraycopy(data, dataStart, memory, physicalAddress, length);
 				}
 
-				totalBytesTransferred = totalBytesTransferred + length;
+				transferAmount = transferAmount + length;
 			}
 
 			pageTable[currentVirtualPage].used = true;
@@ -283,7 +295,7 @@ public class UserProcess {
 			currentVirtualPage++;
 		}		
 
-		return totalBytesTransferred;
+		return transferAmount;
 	}
 
 	/**
