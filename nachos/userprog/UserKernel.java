@@ -140,7 +140,7 @@ public class UserKernel extends ThreadedKernel {
 	}
 
 	public static void releasePPN(int physicalPageNumber) {
-		freePPN.add(physicalPageNumber);
+		freePPN.addLast(physicalPageNumber);
 	}
 
 	public static void incrementProcessCount() {
@@ -169,7 +169,7 @@ public class UserKernel extends ThreadedKernel {
 	private static Coff dummy1 = null;
 
 	// free pages
-	private static LinkedList<Integer> freePPN;
+	public static LinkedList<Integer> freePPN;
 
 	public static Lock freePPNLock;
 

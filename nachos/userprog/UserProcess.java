@@ -236,54 +236,62 @@ public class UserProcess {
 			int currentPageVAStart = currentVirtualPage * pageSize;
 			int currentPageVAEnd = currentPageVAStart + pageSize - 1;
 
-			if (virtualAddress > currentPageVAStart && virtualLengthEnd >= currentPageVAEnd) { // this is the first virtual page
-				int addrOffset = Machine.processor().offsetFromAddress(virtualAddress);
-				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn + addrOffset;
-				int dataStart = offset+transferAmount;
-				int difference = pageSize - addrOffset;
+			int pageCase = pageCase(virtualAddress, virtualLengthEnd, currentPageVAStart, currentPageVAEnd);
 
-				if (read) {
-					System.arraycopy(memory, physicalAddress, data, dataStart, difference);
-				} else {
-					System.arraycopy(data, dataStart, memory, physicalAddress, difference);
-				}
+			int addrOffset, physicalAddress, dataStart, difference;
 
-				transferAmount = transferAmount + difference;
-			} else if (virtualAddress <= currentPageVAStart && virtualLengthEnd >= currentPageVAEnd) { // a middle virtual page we encompass entirely
-				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn;
-				int dataStart = offset+transferAmount;
+			switch (pageCase) {
+				case 0:
+					addrOffset = Machine.processor().offsetFromAddress(virtualAddress);
+					physicalAddress = pageSize * pageTable[currentVirtualPage].ppn + addrOffset;
+					dataStart = offset+transferAmount;
+					difference = pageSize - addrOffset;
 
-				if (read) {
-					System.arraycopy(memory, physicalAddress, data, dataStart, pageSize);
-				} else {
-					System.arraycopy(data, dataStart, memory, physicalAddress, pageSize);
-				}
+					if (read) {
+						System.arraycopy(memory, physicalAddress, data, dataStart, difference);
+					} else {
+						System.arraycopy(data, dataStart, memory, physicalAddress, difference);
+					}
 
-				transferAmount = transferAmount + pageSize;
-			} else if (virtualAddress <= currentPageVAStart && virtualLengthEnd < currentPageVAEnd) { // last virtual page
-				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn;
-				int dataStart = offset+transferAmount;
-				int difference = virtualLengthEnd - currentPageVAStart;
+					transferAmount = transferAmount + difference;
+					break;
+				case 1:
+					physicalAddress = pageSize * pageTable[currentVirtualPage].ppn;
+					dataStart = offset+transferAmount;
 
-				if (read) {
-					System.arraycopy(memory, physicalAddress, data, dataStart, difference);
-				} else {
-					System.arraycopy(data, dataStart, memory, physicalAddress, difference);
-				}
+					if (read) {
+						System.arraycopy(memory, physicalAddress, data, dataStart, pageSize);
+					} else {
+						System.arraycopy(data, dataStart, memory, physicalAddress, pageSize);
+					}
 
-				transferAmount = transferAmount + difference;
-			} else { 
-				int addrOffset = Machine.processor().offsetFromAddress(virtualAddress);
-				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn + addrOffset;
-				int dataStart = offset+transferAmount;
+					transferAmount = transferAmount + pageSize;
+					break;
+				case 2:
+					physicalAddress = pageSize * pageTable[currentVirtualPage].ppn;
+					dataStart = offset+transferAmount;
+					difference = virtualLengthEnd - currentPageVAStart;
 
-				if (read) {
-					System.arraycopy(memory, physicalAddress, data, dataStart, length);
-				} else {
-					System.arraycopy(data, dataStart, memory, physicalAddress, length);
-				}
+					if (read) {
+						System.arraycopy(memory, physicalAddress, data, dataStart, difference);
+					} else {
+						System.arraycopy(data, dataStart, memory, physicalAddress, difference);
+					}
 
-				transferAmount = transferAmount + length;
+					transferAmount = transferAmount + difference;
+					break;
+				case 3:
+					addrOffset = Machine.processor().offsetFromAddress(virtualAddress);
+					physicalAddress = pageSize * pageTable[currentVirtualPage].ppn + addrOffset;
+					dataStart = offset+transferAmount;
+
+					if (read) {
+						System.arraycopy(memory, physicalAddress, data, dataStart, length);
+					} else {
+						System.arraycopy(data, dataStart, memory, physicalAddress, length);
+					}
+
+					transferAmount = transferAmount + length;
 			}
 
 			pageTable[currentVirtualPage].used = true;
@@ -296,6 +304,18 @@ public class UserProcess {
 		}		
 
 		return transferAmount;
+	}
+
+	private int pageCase(int va, int vLEnd, int vaStart, int vaEnd) {
+		if (va > vaStart && vLEnd >= vaEnd) {
+			return 0;
+		} else if (va <= vaStart && vLEnd >= vaEnd) {
+			return 1;
+		} else if (va <= vaStart && vLEnd < vaEnd) {
+			return 2;
+		} else {
+			return 3;
+		}
 	}
 
 	/**
@@ -362,8 +382,9 @@ public class UserProcess {
 		// and finally reserve 1 page for arguments
 		numPages++;
 
-		if (!loadSections())
+		if (!loadSections()) {
 			return false;
+		}
 
 		// store arguments in last page
 		int entryOffset = (numPages - 1) * pageSize;
@@ -393,13 +414,15 @@ public class UserProcess {
 	 * @return <tt>true</tt> if the sections were successfully loaded.
 	 */
 	protected boolean loadSections() {
-		if (numPages > Machine.processor().getNumPhysPages()) {
+		UserKernel.freePPNLock.acquire();
+
+		// do we have enough free physical pages?
+		if (numPages > UserKernel.freePPN.size()) {
 			coff.close();
 			Lib.debug(dbgProcess, "\tinsufficient physical memory");
+			UserKernel.freePPNLock.release();
 			return false;
 		}
-
-		UserKernel.freePPNLock.acquire();
 
 		this.pageTable = new TranslationEntry[numPages];
 
@@ -529,7 +552,7 @@ public class UserProcess {
 	}
 
 	private int handleExec(int virtualAddress, int argc, int argv) {
-		if (virtualAddress >= 0 && virtualAddress < pageSize * numPages && argv >= 0 && argv < pageSize * numPages && argc >= 0) {
+		if (virtualAddress >= 0 && virtualAddress < pageSize * numPages && argv >= 0 && argv < pageSize * numPages && argc >= 0 && argc <= 16) {
 			String name = readVirtualMemoryString(virtualAddress, 256);
 
 			if (name != null && name.length() > 0 && name.endsWith(".coff")) {
@@ -585,7 +608,6 @@ public class UserProcess {
 				this.childMapLock.acquire();
 				this.childMap.remove(pid);
 				this.childMapLock.release();
-
 
 				if(!child.abnormal) {
 					byte[] statusBytes = Lib.bytesFromInt(child.status);
@@ -868,6 +890,9 @@ public class UserProcess {
 
 		default:
 			this.abnormal = true;
+
+			// still call exit to clean up the process 
+			// and release physical pages
 			handleExit(Integer.MIN_VALUE);
 			Lib.debug(dbgProcess, "Unexpected exception: "
 					+ Processor.exceptionNames[cause]);
