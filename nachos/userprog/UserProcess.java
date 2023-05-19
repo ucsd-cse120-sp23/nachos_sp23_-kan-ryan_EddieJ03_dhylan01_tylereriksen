@@ -196,35 +196,36 @@ public class UserProcess {
 		return transfer(vaddr, data, offset, length, false);
 	}
 
-	private int transfer(int vaddr, byte[] data, int offset, int length, boolean read) {
+	private int transfer(int virtualAddress, byte[] data, int offset, int length, boolean read) {
 		byte[] memory = Machine.processor().getMemory();
 
 		int totalBytesTransferred = 0, virtualAddressEnd = this.numPages * pageSize;
 
 		// not within bounds of process' virtual address space
-		if (vaddr < 0 || vaddr >= virtualAddressEnd)
+		if (virtualAddress < 0 || virtualAddress >= virtualAddressEnd)
 			return totalBytesTransferred;
 
-		int currentVirtualPage = Machine.processor().pageFromAddress(vaddr);
-		int endVirtualPage = Machine.processor().pageFromAddress(vaddr+length);
-		int virtualLengthEnd = vaddr+length;
+		int currentVirtualPage = Machine.processor().pageFromAddress(virtualAddress);
+		int endVirtualPage = Machine.processor().pageFromAddress(virtualAddress+length);
+		int virtualLengthEnd = virtualAddress+length;
 
 		// copy everything we can until we exceed last virtual page allocated for this process
+		// each time we are transferring at most pageSize
 		while (currentVirtualPage < pageTable.length && currentVirtualPage <= endVirtualPage) {
 			if (!pageTable[currentVirtualPage].valid) {
 				break; 
 			}
 
+			// if we are not reading and this is a readOnly page
 			if (!read && pageTable[currentVirtualPage].readOnly) {
-				
 				break;
 			}
 			
 			int currentPageVAStart = currentVirtualPage * pageSize;
-			int currentPageVAEnd = currentPageVAStart + pageSize-1;
+			int currentPageVAEnd = currentPageVAStart + pageSize - 1;
 
-			if (vaddr > currentPageVAStart && virtualLengthEnd >= currentPageVAEnd) {
-				int addrOffset = Machine.processor().offsetFromAddress(vaddr);
+			if (virtualAddress > currentPageVAStart && virtualLengthEnd >= currentPageVAEnd) { // this is the first virtual page
+				int addrOffset = Machine.processor().offsetFromAddress(virtualAddress);
 				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn + addrOffset;
 				int dataStart = offset+totalBytesTransferred;
 				int difference = pageSize - addrOffset;
@@ -236,7 +237,7 @@ public class UserProcess {
 				}
 
 				totalBytesTransferred = totalBytesTransferred + difference;
-			} else if (vaddr <= currentPageVAStart && virtualLengthEnd >= currentPageVAEnd) {
+			} else if (virtualAddress <= currentPageVAStart && virtualLengthEnd >= currentPageVAEnd) { // a middle virtual page we encompass entirely
 				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn;
 				int dataStart = offset+totalBytesTransferred;
 
@@ -247,19 +248,20 @@ public class UserProcess {
 				}
 
 				totalBytesTransferred = totalBytesTransferred + pageSize;
-			} else if (vaddr <= currentPageVAStart && virtualLengthEnd < currentPageVAEnd) {
+			} else if (virtualAddress <= currentPageVAStart && virtualLengthEnd < currentPageVAEnd) { // last virtual page
 				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn;
 				int dataStart = offset+totalBytesTransferred;
+				int difference = virtualLengthEnd - currentPageVAStart;
 
 				if (read) {
-					System.arraycopy(memory, physicalAddress, data, dataStart, virtualLengthEnd - currentPageVAStart);
+					System.arraycopy(memory, physicalAddress, data, dataStart, difference);
 				} else {
-					System.arraycopy(data, dataStart, memory, physicalAddress, virtualLengthEnd - currentPageVAStart);
+					System.arraycopy(data, dataStart, memory, physicalAddress, difference);
 				}
 
-				totalBytesTransferred = totalBytesTransferred + virtualLengthEnd - currentPageVAStart;
+				totalBytesTransferred = totalBytesTransferred + difference;
 			} else { 
-				int addrOffset = Machine.processor().offsetFromAddress(vaddr);
+				int addrOffset = Machine.processor().offsetFromAddress(virtualAddress);
 				int physicalAddress = pageSize * pageTable[currentVirtualPage].ppn + addrOffset;
 				int dataStart = offset+totalBytesTransferred;
 
@@ -409,15 +411,10 @@ public class UserProcess {
 
 			for (int i = 0; i < section.getLength(); i++) {
 				int vpn = section.getFirstVPN() + i;
-				// System.out.println("412:" + vpn);
 				pageTable[vpn].readOnly = section.isReadOnly();
 				section.loadPage(i, pageTable[vpn].ppn);
 			}
 		}
-
-		// for(TranslationEntry te : pageTable) {
-		// 	System.out.println(te.readOnly);
-		// }
 
 		return true;
 	}
@@ -427,6 +424,7 @@ public class UserProcess {
 	 */
 	protected void unloadSections() {
 		UserKernel.freePPNLock.acquire();
+
 		for (int i = 0; i < pageTable.length; i++) {
 			TranslationEntry entry = pageTable[i];
 
@@ -437,6 +435,7 @@ public class UserProcess {
 			UserKernel.releasePPN(entry.ppn);
 			pageTable[i] = null;
 		}
+
 		UserKernel.freePPNLock.release();
 	}
 
@@ -489,20 +488,19 @@ public class UserProcess {
 
 		Lib.debug(dbgProcess, "UserProcess.handleExit (" + status + ")");
 
+		// close everything
 		for (int i = 0; i < fdTable.length; i++) {
 			if (fdTable[i] != null) {
 				handleClose(i);
 			}
 		}
 
-		for (UserProcess child : childMap.values()) {
-			child.parentProcess = null;
-		}
-
 		unloadSections();
 
 		coff.close();
 
+		// remember exit status value of this process 
+		// this will be needed in handleJoin for parent
 		this.status = status;
 
 		UserKernel.decrementProcessCount();
@@ -519,15 +517,10 @@ public class UserProcess {
 	}
 
 	private int handleExec(int virtualAddress, int argc, int argv) {
-		// argc must be non-negative
 		if (virtualAddress >= 0 && virtualAddress < pageSize * numPages && argv >= 0 && argv < pageSize * numPages && argc >= 0) {
 			String name = readVirtualMemoryString(virtualAddress, 256);
 
-			// this string must include the ".coff" extension
 			if (name != null && name.length() > 0 && name.endsWith(".coff")) {
-				// get the arguments address
-				// each pointer has 4 type, use readvirtualmemory() and track the current vaddr
-
 				String[] arguments = new String[argc];
 
 				int i = 0;
@@ -536,7 +529,7 @@ public class UserProcess {
 					byte[] buffer = new byte[4];
 
 					// read in address (argv contains pointers)
-					int readCount = readVirtualMemory(argv + i * 4, buffer);
+					int readCount = readVirtualMemory(argv + i * 4, buffer, 0, 4);
 
 					// read in 4 bytes (if not there was an issue)
 					if (readCount == 4) {
@@ -550,12 +543,9 @@ public class UserProcess {
 					}
 				}
 
-				// create child process
 				UserProcess child = new UserProcess();
 
 				if (child.execute(name, arguments)) {
-					child.parentProcess = this;
-
 					this.childMapLock.acquire();
 					this.childMap.put(child.processNumber, child);
 					this.childMapLock.release();
@@ -573,13 +563,10 @@ public class UserProcess {
 	private int handleJoin(int pid, int status) {
 		 if (pid >= 0 && status >= 0 && status < pageSize * numPages) {
 			this.childMapLock.acquire();
-			UserProcess child = childMap.getOrDefault(pid, null);
+			UserProcess child = this.childMap.getOrDefault(pid, null);
 			this.childMapLock.release();
 
-			System.out.println("inside join, size: "+ childMap.size());
-
 			if (child != null) {
-				// wait for child thread to finish
 				child.thread.join();
 
 				// remove from map
@@ -587,17 +574,16 @@ public class UserProcess {
 				this.childMap.remove(pid);
 				this.childMapLock.release();
 
-				// child exited normally
+
 				if(!child.abnormal) {
-					byte[] statusBytes;
-					statusBytes = Lib.bytesFromInt(child.status);
+					byte[] statusBytes = Lib.bytesFromInt(child.status);
 
 					if (writeVirtualMemory(status, statusBytes) == 4) {
 						return 1;
 					} else {
 						return 0;
 					}
-                } else { // child did not exit normally
+                } else { 
 					return 0;
 				}
 			}
@@ -607,9 +593,14 @@ public class UserProcess {
 	}
 
 	private int handleCreate(int virtualAddress) {
+		// BULLET PROOF: invalid virtual addy
+		if (virtualAddress < 0 || virtualAddress >= numPages*pageSize) {
+			return -1;
+		}
+
 		String name = readVirtualMemoryString(virtualAddress, 256);
 
-		if(name != null) {
+		if(name != null && !name.isEmpty() && name.length() <= 256) {
 			OpenFile file = UserKernel.fileSystem.open(name, true);
 
 			if (file != null) {
@@ -630,9 +621,14 @@ public class UserProcess {
 	}
 
 	private int handleOpen(int virtualAddress) {
+		// BULLET PROOF: invalid virtual addy
+		if (virtualAddress < 0 || virtualAddress >= numPages*pageSize) {
+			return -1;
+		}
+
 		String name = readVirtualMemoryString(virtualAddress, 256);
 
-		if(name != null && name.length() <= 256) {
+		if(name != null && !name.isEmpty() && name.length() <= 256) {
 			OpenFile file = UserKernel.fileSystem.open(name, false);
 
 			if (file != null) {
@@ -656,7 +652,7 @@ public class UserProcess {
 	private int handleRead(int fileDescriptor, int buffer, int size) {
 		int virtualAddressEnd = this.numPages * pageSize;
 
-		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] != null && size >= 0 
+		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] != null && size >= 0 && size < virtualAddressEnd
 			&& buffer >= 0 && buffer < virtualAddressEnd) { 
 			int firstVirtualPage = Processor.pageFromAddress(buffer);
 			int lastVirtualPage = Processor.pageFromAddress(buffer + size);
@@ -666,18 +662,21 @@ public class UserProcess {
 					return -1;
 				}
 
-				byte[] local = new byte[size];
-
-				int result = fdTable[fileDescriptor].read(local, 0, size);
-
-				if (result != -1 && result <= size) { 
-					// write it to virtual mem
-					// check when return is 0
-					int res = writeVirtualMemory(buffer, local, 0, result);
-					return res;
-				}
-
 				firstVirtualPage++;
+			}
+
+			byte[] local = new byte[size];
+
+			int result = fdTable[fileDescriptor].read(local, 0, size);
+
+			if (result != -1) { 
+				// write it to virtual mem
+				// what if we couldn't write all of result?
+				int written = writeVirtualMemory(buffer, local, 0, result);
+				if(written != result) {
+					return -1;
+				}
+				return written;
 			}
 		}
 
@@ -730,9 +729,14 @@ public class UserProcess {
 	}
 
 	private int handleUnlink(int virtualAddress) {
+		// BULLET PROOF: invalid virtual addy
+		if (virtualAddress < 0 || virtualAddress >= numPages*pageSize) {
+			return -1;
+		}
+		
 		String name = readVirtualMemoryString(virtualAddress, 256);
 
-		return (name != null && UserKernel.fileSystem.remove(name)) ? 0 : -1;
+		return (name != null && !name.isEmpty() && UserKernel.fileSystem.remove(name)) ? 0 : -1;
 	}
 
 	private static final int syscallHalt = 0, syscallExit = 1, syscallExec = 2,
@@ -893,8 +897,6 @@ public class UserProcess {
 	private Lock childMapLock;
 
 	private Integer status;
-
-	private UserProcess parentProcess;
 
 	private boolean abnormal;
 }

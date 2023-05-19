@@ -136,17 +136,11 @@ public class UserKernel extends ThreadedKernel {
 	}
 
 	public static int acquirePPN() {
-		//freePPNLock.acquire();
-
 		return freePPN.pollFirst();
 	}
 
 	public static void releasePPN(int physicalPageNumber) {
-		//freePPNLock.acquire();
-
 		freePPN.add(physicalPageNumber);
-
-		//freePPNLock.release();
 	}
 
 	public static void incrementProcessCount() {
