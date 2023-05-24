@@ -39,25 +39,11 @@ public class VMProcess extends UserProcess {
 	 * @return <tt>true</tt> if successful.
 	 */
 	protected boolean loadSections() {
-		UserKernel.freePPNLock.acquire();
-
-		// do we have enough free physical pages?
-		if (numPages > UserKernel.freePPN.size()) {
-			coff.close();
-			Lib.debug(dbgProcess, "\tinsufficient physical memory");
-			UserKernel.freePPNLock.release();
-			return false;
-		}
-
 		this.pageTable = new TranslationEntry[numPages];
 
 		for (int i = 0; i < numPages; i++) {
-			int ppn = UserKernel.acquirePPN();
-
-			pageTable[i] = new TranslationEntry(i, ppn, false, false, false, false);
+			pageTable[i] = new TranslationEntry(i, -1, false, false, false, false);
 		}
-
-		UserKernel.freePPNLock.release();
 
 		return true;
 	}
@@ -85,9 +71,25 @@ public class VMProcess extends UserProcess {
 				virtPage += 1;
 
 				if(vpn == badPage) {
+					UserKernel.freePPNLock.acquire();
+
+					// do we have enough free physical pages?
+					if (UserKernel.freePPN.size() == 0) {
+						coff.close();
+						Lib.debug(dbgProcess, "\tinsufficient physical memory");
+						UserKernel.freePPNLock.release();
+						
+						// need to swap
+					}
+				
+					int ppn = UserKernel.acquirePPN();
+
+					UserKernel.freePPNLock.release();
+
+					pageTable[vpn].ppn = ppn;
 					pageTable[vpn].readOnly = section.isReadOnly();
-					System.out.println(pageTable[vpn].valid);
 					pageTable[vpn].valid = true;
+
 					section.loadPage(i, pageTable[vpn].ppn);
 					return;
 				}
@@ -99,6 +101,23 @@ public class VMProcess extends UserProcess {
 
 		for(;virtPage < numPages; virtPage++) {
 			if (virtPage == badPage) {
+				UserKernel.freePPNLock.acquire();
+
+				// do we have enough free physical pages?
+				if (UserKernel.freePPN.size() == 0) {
+					coff.close();
+					Lib.debug(dbgProcess, "\tinsufficient physical memory");
+					UserKernel.freePPNLock.release();
+					
+					// need to swap
+				}
+			
+				int ppn = UserKernel.acquirePPN();
+
+				UserKernel.freePPNLock.release();
+
+				pageTable[virtPage].ppn = ppn;
+
 				byte[] zeroedArray = new byte[Processor.pageSize];
 
 				for(int i = 0; i < zeroedArray.length; i++){
