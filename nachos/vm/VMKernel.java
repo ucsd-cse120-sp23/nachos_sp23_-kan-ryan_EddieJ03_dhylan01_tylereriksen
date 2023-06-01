@@ -11,7 +11,7 @@ import java.util.*;
  * A kernel that can support multiple demand-paging user processes.
  */
 public class VMKernel extends UserKernel {
-	private class InvertedPage {
+	public class InvertedPage {
         public boolean pin;
 		public int vpn;
 		public UserProcess process;
@@ -29,23 +29,6 @@ public class VMKernel extends UserKernel {
 	 */
 	public VMKernel() {
 		super();
-		
-		freeSwapAreas = new LinkedList<>();
-
-		swappingFile = ThreadedKernel.fileSystem.open("SwappingFile", true);
-
-		int numPhysPages = Machine.processor().getNumPhysPages();
-
-		invertedPageTable = new InvertedPage[numPhysPages];
-
-		for (int i = 0; i < numPhysPages; i++) {
-			freeSwapAreas.add(i);
-			invertedPageTable[i] = new InvertedPage(false, -1, null);
-		}
-
-		lock = new Lock();
-
-		condition = new Condition(lock);
 	}
 
 	/**
@@ -53,6 +36,28 @@ public class VMKernel extends UserKernel {
 	 */
 	public void initialize(String[] args) {
 		super.initialize(args);
+
+		swappingFile = ThreadedKernel.fileSystem.open("SwappingFile", true);
+
+		freeSwapAreas = new LinkedList<>();
+
+		swapAreaCounter = 0;
+
+		int numPhysPages = Machine.processor().getNumPhysPages();
+
+		invertedPageTable = new InvertedPage[numPhysPages];
+
+		for (int i = 0; i < numPhysPages; i++) {
+			invertedPageTable[i] = new InvertedPage(false, -1, null);
+		}
+
+		pageReplacementIndex = 0;
+
+		lock = new Lock();
+
+		condition = new Condition(lock);
+
+		numPinnedPages = 0;
 	}
 
 	/**
@@ -73,6 +78,8 @@ public class VMKernel extends UserKernel {
 	 * Terminate this kernel. Never returns.
 	 */
 	public void terminate() {
+		System.out.println(VMKernel.freeSwapAreas);
+		swappingFile.close();
         ThreadedKernel.fileSystem.remove("SwappingFile");
 		super.terminate();
 	}
@@ -84,6 +91,8 @@ public class VMKernel extends UserKernel {
 
 	public static LinkedList<Integer> freeSwapAreas;
 
+	public static int swapAreaCounter;
+
 	public static InvertedPage[] invertedPageTable;
 
 	public static OpenFile swappingFile;
@@ -91,4 +100,8 @@ public class VMKernel extends UserKernel {
 	public static Lock lock;
 
 	public static Condition condition;
+
+	public static int pageReplacementIndex;
+
+	public static int numPinnedPages;
 }

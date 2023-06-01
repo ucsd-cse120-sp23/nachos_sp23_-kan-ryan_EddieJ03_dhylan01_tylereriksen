@@ -35,6 +35,7 @@ public class UserProcess {
 		this.fdTable[0] = UserKernel.console.openForReading();
 		this.fdTable[1] = UserKernel.console.openForWriting();
 		this.childMap = new HashMap<>();
+		this.pagesForProcess = new LinkedList<>();
 		this.childMapLock = new Lock();
 		status = null;
 		abnormal = false;
@@ -208,7 +209,7 @@ public class UserProcess {
 	 * @param read whether this is read or not
 	 * @return the number of bytes successfully transferred.
 	 */
-	private int transfer(int virtualAddress, byte[] data, int offset, int length, boolean read) {
+	protected int transfer(int virtualAddress, byte[] data, int offset, int length, boolean read) {
 		byte[] memory = Machine.processor().getMemory();
 
 		int transferAmount = 0, virtualAddressEnd = this.numPages * pageSize;
@@ -306,7 +307,7 @@ public class UserProcess {
 		return transferAmount;
 	}
 
-	private int pageCase(int va, int vLEnd, int vaStart, int vaEnd) {
+	protected int pageCase(int va, int vLEnd, int vaStart, int vaEnd) {
 		if (va > vaStart && vLEnd >= vaEnd) {
 			return 0;
 		} else if (va <= vaStart && vLEnd >= vaEnd) {
@@ -328,7 +329,7 @@ public class UserProcess {
 	 * @param args the arguments to pass to the executable.
 	 * @return <tt>true</tt> if the executable was successfully loaded.
 	 */
-	private boolean load(String name, String[] args) {
+	protected boolean load(String name, String[] args) {
 		Lib.debug(dbgProcess, "UserProcess.load(\"" + name + "\")");
 
 		OpenFile executable = ThreadedKernel.fileSystem.open(name, false);
@@ -414,6 +415,7 @@ public class UserProcess {
 	 * @return <tt>true</tt> if the sections were successfully loaded.
 	 */
 	protected boolean loadSections() {
+		System.out.println("NOOOO");
 		UserKernel.freePPNLock.acquire();
 
 		// do we have enough free physical pages?
@@ -428,7 +430,7 @@ public class UserProcess {
 
 		for (int i = 0; i < numPages; i++) {
 			int ppn = UserKernel.acquirePPN();
-
+			this.pagesForProcess.add(ppn);
 			pageTable[i] = new TranslationEntry(i, ppn, true, false, false, false);
 		}
 
@@ -460,15 +462,8 @@ public class UserProcess {
 	protected void unloadSections() {
 		UserKernel.freePPNLock.acquire();
 
-		for (int i = 0; i < pageTable.length; i++) {
-			TranslationEntry entry = pageTable[i];
-
-			if (entry == null) {
-				continue;
-			}
-
-			UserKernel.releasePPN(entry.ppn);
-			pageTable[i] = null;
+		while (!this.pagesForProcess.isEmpty()) {
+			UserKernel.releasePPN(this.pagesForProcess.pollLast());
 		}
 
 		UserKernel.freePPNLock.release();
@@ -538,9 +533,12 @@ public class UserProcess {
 		// this will be needed in handleJoin for parent
 		this.status = status;
 
+		System.out.println("status: "+status);
+
 		UserKernel.decrementProcessCount();
 
 		if (UserKernel.processCount == 0) {
+			System.out.println("TOTAL NUMBER OF PHYSICAL PAGES: " + UserKernel.freePPN.size());
 			Kernel.kernel.terminate();
 		}
 
@@ -551,7 +549,7 @@ public class UserProcess {
 		return 0;
 	}
 
-	private int handleExec(int virtualAddress, int argc, int argv) {
+	protected int handleExec(int virtualAddress, int argc, int argv) {
 		if (virtualAddress >= 0 && virtualAddress < pageSize * numPages && argv >= 0 && argv < pageSize * numPages && argc >= 0 && argc <= 16 && 4*argc+argv<pageSize*numPages) {
 			String name = readVirtualMemoryString(virtualAddress, 256);
 
@@ -578,7 +576,7 @@ public class UserProcess {
 					}
 				}
 
-				UserProcess child = new UserProcess();
+				UserProcess child = newUserProcess();
 
 				if (child.execute(name, arguments)) {
 					this.childMapLock.acquire();
@@ -683,7 +681,7 @@ public class UserProcess {
 	}
 
 	// read bytes from file corresponding to fileDescriptor into buffer
-	private int handleRead(int fileDescriptor, int buffer, int size) {
+	protected int handleRead(int fileDescriptor, int buffer, int size) {
 		int virtualAddressEnd = this.numPages * pageSize;
 
 		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] != null && size >= 0 && size < virtualAddressEnd
@@ -718,7 +716,7 @@ public class UserProcess {
 	}
 
 	// read amount of size bytes from buffer to fileDescriptor
-	private int handleWrite(int fileDescriptor, int buffer, int size) {
+	protected int handleWrite(int fileDescriptor, int buffer, int size) {
 		int virtualAddressEnd = this.numPages * pageSize;
 
 		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] != null && size >= 0 
@@ -900,11 +898,13 @@ public class UserProcess {
 		}
 	}
 
+	public LinkedList<Integer> pagesForProcess;
+
 	/** The program being run by this process. */
 	protected Coff coff;
 
 	/** This process's page table. */
-	protected TranslationEntry[] pageTable;
+	public TranslationEntry[] pageTable;
 
 	protected OpenFile[] fdTable;
 

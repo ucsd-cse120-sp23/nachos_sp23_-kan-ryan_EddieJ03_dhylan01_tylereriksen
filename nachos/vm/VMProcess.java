@@ -38,6 +38,7 @@ public class VMProcess extends UserProcess {
 	 * 
 	 * @return <tt>true</tt> if successful.
 	 */
+	@Override
 	protected boolean loadSections() {
 		this.pageTable = new TranslationEntry[numPages];
 
@@ -59,6 +60,9 @@ public class VMProcess extends UserProcess {
 		int badPage = Processor.pageFromAddress(virtualAddress);
 		int numCoffSections = this.coff.getNumSections();
 		int virtPage = 0;
+		
+		// big lock around everything
+		UserKernel.freePPNLock.acquire();
 
 		for (int s = 0; s < numCoffSections; s++) {
 			CoffSection section = this.coff.getSection(s);
@@ -68,67 +72,214 @@ public class VMProcess extends UserProcess {
 
 			for (int i = 0; i < section.getLength(); i++) {
 				int vpn = section.getFirstVPN() + i;
-				virtPage += 1;
+				virtPage = vpn;
 
 				if(vpn == badPage) {
-					UserKernel.freePPNLock.acquire();
+					// the ppn we will assign the faulting vpn to
+					int ppn;
 
 					// do we have enough free physical pages?
 					if (UserKernel.freePPN.size() == 0) {
-						coff.close();
-						Lib.debug(dbgProcess, "\tinsufficient physical memory");
-						UserKernel.freePPNLock.release();
-						
-						// need to swap
-					}
-				
-					int ppn = UserKernel.acquirePPN();
+						// go ahead and sleep if everything is pinned
+						if(VMKernel.numPinnedPages == Machine.processor().getNumPhysPages()) {
+							VMKernel.condition.sleep();
+						}
 
-					UserKernel.freePPNLock.release();
+						UserProcess process = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].process;
+						int vpnToEvict = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].vpn;
+						boolean pin = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].pin;
+
+						while(process.pageTable[vpnToEvict].used) {
+							// if page is pinned increment VMKernel.pageReplacementIndex and continue
+							if (pin) {
+								VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+								continue;
+							}
+
+							// set used to false
+							process.pageTable[vpnToEvict].used = false;
+
+							// increment VMKernel.pageReplacementIndex
+							VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+
+							// update process, vpn, pin
+							process = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].process;
+							vpnToEvict = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].vpn;
+							pin = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].pin;
+						}
+
+						ppn = VMKernel.pageReplacementIndex;
+
+						process.pagesForProcess.remove(Integer.valueOf(ppn));
+
+						// if page is dirty write it out
+						if (process.pageTable[vpnToEvict].dirty) {
+							int swapPageNumber = VMKernel.freeSwapAreas.isEmpty() ? 
+											 	 VMKernel.swapAreaCounter++ : 
+											 	 VMKernel.freeSwapAreas.pollLast();
+
+							VMKernel.swappingFile.write(swapPageNumber * Processor.pageSize, 
+											   Machine.processor().getMemory(), 
+											   Processor.makeAddress(process.pageTable[vpnToEvict].ppn, 0), 
+											   Processor.pageSize);    
+
+							// store the location in swap file in ppn
+                        	process.pageTable[vpnToEvict].ppn = swapPageNumber;
+						}
+
+						// increment VMKernel.pageReplacementIndex
+						VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+
+						// invalidate evicted entry
+						process.pageTable[vpnToEvict].valid = false;
+					} else {
+						ppn = UserKernel.acquirePPN();
+					}
+
+					pagesForProcess.add(ppn);
+
+					if(pageTable[vpn].dirty) {
+						VMKernel.swappingFile.read(pageTable[vpn].ppn * Processor.pageSize, 
+										  Machine.processor().getMemory(), 
+										  Processor.makeAddress(ppn, 0), 
+										  Processor.pageSize);
+
+                        VMKernel.freeSwapAreas.add(pageTable[vpn].ppn);
+
+						pageTable[vpn].ppn = ppn;
+
+                        pageTable[vpn].valid = pageTable[vpn].used = true;
+
+						VMKernel.invertedPageTable[ppn].process = this;
+                        VMKernel.invertedPageTable[ppn].vpn = vpn;
+						VMKernel.invertedPageTable[ppn].pin = false;
+
+						// release lock before returning
+						UserKernel.freePPNLock.release();
+						return;
+					}
 
 					pageTable[vpn].ppn = ppn;
 					pageTable[vpn].readOnly = section.isReadOnly();
 					pageTable[vpn].valid = true;
+					pageTable[vpn].used = true;
 
-					section.loadPage(i, pageTable[vpn].ppn);
+					section.loadPage(i, ppn);
+
+					VMKernel.invertedPageTable[ppn].process = this;
+					VMKernel.invertedPageTable[ppn].vpn = vpn;
+					VMKernel.invertedPageTable[ppn].pin = false;
+
+					// release lock before returning since we are done
+					UserKernel.freePPNLock.release();
 					return;
 				}
 			}
 		}
 
-		// now zeroing out stack page
+		// start the stack
 		virtPage += 1;
 
 		for(;virtPage < numPages; virtPage++) {
 			if (virtPage == badPage) {
-				UserKernel.freePPNLock.acquire();
+				// the ppn we will assign the faulting vpn to
+				int ppn;
 
 				// do we have enough free physical pages?
 				if (UserKernel.freePPN.size() == 0) {
-					coff.close();
-					Lib.debug(dbgProcess, "\tinsufficient physical memory");
-					UserKernel.freePPNLock.release();
-					
-					// need to swap
-				}
-			
-				int ppn = UserKernel.acquirePPN();
+					UserProcess process = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].process;
+					int vpn = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].vpn;
+					boolean pin = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].pin;
 
-				UserKernel.freePPNLock.release();
+					while(process.pageTable[vpn].used) {
+						// set used to false
+						process.pageTable[vpn].used = false;
+
+						// increment VMKernel.pageReplacementIndex
+						VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+
+						// update process, vpn, pin
+						process = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].process;
+						vpn = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].vpn;
+						pin = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].pin;
+					}
+
+					// the current index is the ppn we are giving to this user process
+					ppn = VMKernel.pageReplacementIndex;
+
+					process.pagesForProcess.remove(Integer.valueOf(ppn));
+
+					// if page is dirty write it out
+					if (process.pageTable[vpn].dirty) {
+						int swapPageNumber = VMKernel.freeSwapAreas.isEmpty() ? 
+											 VMKernel.swapAreaCounter++ : 
+											 VMKernel.freeSwapAreas.pollLast();
+
+						VMKernel.swappingFile.write(swapPageNumber * Processor.pageSize, 
+											Machine.processor().getMemory(), 
+											Processor.makeAddress(process.pageTable[vpn].ppn, 0), 
+											Processor.pageSize);    
+
+						// store the location in swap file in ppn
+						process.pageTable[vpn].ppn = swapPageNumber;
+					}
+
+					// increment VMKernel.pageReplacementIndex
+					VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+
+					// invalidate evicted entry
+					process.pageTable[vpn].valid = false;
+				} else {
+					ppn = UserKernel.acquirePPN();
+				}
+
+				pagesForProcess.add(ppn);
+
+				if(pageTable[virtPage].dirty) {
+					VMKernel.swappingFile.read(pageTable[virtPage].ppn * Processor.pageSize, 
+										Machine.processor().getMemory(), 
+										Processor.makeAddress(ppn, 0), 
+										Processor.pageSize);
+
+					VMKernel.freeSwapAreas.add(pageTable[virtPage].ppn);
+
+					pageTable[virtPage].ppn = ppn;
+
+					pageTable[virtPage].valid = pageTable[virtPage].used = true;
+
+					VMKernel.invertedPageTable[ppn].process = this;
+					VMKernel.invertedPageTable[ppn].vpn = virtPage;
+					VMKernel.invertedPageTable[ppn].pin = false;
+					
+					// release lock before returning
+					UserKernel.freePPNLock.release();
+					return;
+				}
 
 				pageTable[virtPage].ppn = ppn;
 
 				byte[] zeroedArray = new byte[Processor.pageSize];
 
-				for(int i = 0; i < zeroedArray.length; i++){
+				for(int i = 0; i < zeroedArray.length; i++) {
 					zeroedArray[i] = 0;
 				}
 
 				System.arraycopy(zeroedArray, 0, Machine.processor().getMemory(), pageTable[virtPage].ppn * Processor.pageSize, Processor.pageSize);
 				pageTable[virtPage].valid = true;
+				pageTable[virtPage].used = true;
+
+				VMKernel.invertedPageTable[ppn].process = this;
+				VMKernel.invertedPageTable[ppn].vpn = virtPage;
+				VMKernel.invertedPageTable[ppn].pin = false;
+
+				// release lock before returning
+				UserKernel.freePPNLock.release();
 				return;
 			}
 		}
+
+		// if we got here this means there was no page fault?
+		UserKernel.freePPNLock.release();
 	}
 
 	// read bytes from file corresponding to fileDescriptor into buffer
@@ -137,26 +288,9 @@ public class VMProcess extends UserProcess {
 		int virtualAddressEnd = this.numPages * pageSize;
 
 		if (fileDescriptor >= 0 && fileDescriptor < fdTable.length && fdTable[fileDescriptor] != null && size >= 0 && size < virtualAddressEnd
-			&& buffer >= 0 && buffer < virtualAddressEnd) { 
+			&& buffer >= 0 && buffer < virtualAddressEnd && buffer+size < virtualAddressEnd) { 
 			int firstVirtualPage = Processor.pageFromAddress(buffer);
 			int lastVirtualPage = Processor.pageFromAddress(buffer + size);
-
-			while (firstVirtualPage <= lastVirtualPage) {
-				if (lastVirtualPage >= pageTable.length) {
-					return -1;
-				}
-
-				// if not valid handle page fault
-				if (!pageTable[firstVirtualPage].valid) {
-					handlePagefault(Processor.makeAddress(firstVirtualPage, 0)); 
-				}
-
-				if (pageTable[firstVirtualPage].readOnly) {
-					return -1;
-				}
-
-				firstVirtualPage++;
-			}
 
 			byte[] local = new byte[size];
 
@@ -166,9 +300,11 @@ public class VMProcess extends UserProcess {
 				// write it to virtual mem
 				// what if we couldn't write all of result?
 				int written = writeVirtualMemory(buffer, local, 0, result);
+
 				if(written != result) {
 					return -1;
 				}
+
 				return written;
 			}
 		}
@@ -185,15 +321,6 @@ public class VMProcess extends UserProcess {
 			&& buffer >= 0 && buffer < virtualAddressEnd && buffer+size < virtualAddressEnd) { 
 			int firstVirtualPage = Processor.pageFromAddress(buffer);
 			int lastVirtualPage = Processor.pageFromAddress(buffer + size); 
-
-			while (firstVirtualPage <= lastVirtualPage) {
-				// if not valid handle page fault
-				if (!pageTable[firstVirtualPage].valid) {
-					handlePagefault(Processor.makeAddress(firstVirtualPage, 0)); 
-				}
-
-				firstVirtualPage++;
-			}
 
 			byte[] local = new byte[size];
 
@@ -236,18 +363,31 @@ public class VMProcess extends UserProcess {
 		int endVirtualPage = Machine.processor().pageFromAddress(virtualAddress+length);
 		int virtualLengthEnd = virtualAddress+length;
 
+		// lock here?
+		VMKernel.lock.acquire();
+
 		// copy everything we can until we exceed last virtual page allocated for this process
 		// each time we are transferring at most pageSize
 		while (currentVirtualPage < pageTable.length && currentVirtualPage <= endVirtualPage) {
 			if (!pageTable[currentVirtualPage].valid) {
 				System.out.println("PAGE FAULT");
-				handlePagefault(Processor.makeAddress(currentVirtualPage, 0)); 
+				handlePagefault(Processor.makeAddress(currentVirtualPage, 0));
+
+				if (!pageTable[currentVirtualPage].valid) {
+					break;
+				}
 			}
 
 			// if we are not reading and this is a readOnly page
 			if (!read && pageTable[currentVirtualPage].readOnly) {
 				break;
 			}
+
+			// pin the page from inverted page table
+			VMKernel.invertedPageTable[pageTable[currentVirtualPage].ppn].pin = true;
+
+			// increment pinned count
+			VMKernel.numPinnedPages += 1;
 			
 			int currentPageVAStart = currentVirtualPage * pageSize;
 			int currentPageVAEnd = currentPageVAStart + pageSize - 1;
@@ -310,6 +450,15 @@ public class VMProcess extends UserProcess {
 					transferAmount = transferAmount + length;
 			}
 
+			// set pin to false
+			VMKernel.invertedPageTable[pageTable[currentVirtualPage].ppn].pin = false;
+
+			// decrement pin page count
+			VMKernel.numPinnedPages -= 1;
+
+			// wake up a process possibly waiting
+			VMKernel.condition.wake();
+
 			pageTable[currentVirtualPage].used = true;
 
 			if (!read) {
@@ -318,6 +467,9 @@ public class VMProcess extends UserProcess {
 
 			currentVirtualPage++;
 		}		
+
+		// transfer done, release lock
+		VMKernel.lock.release();
 
 		return transferAmount;
 	}

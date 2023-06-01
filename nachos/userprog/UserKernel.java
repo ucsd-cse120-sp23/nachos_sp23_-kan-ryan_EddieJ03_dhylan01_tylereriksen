@@ -45,6 +45,8 @@ public class UserKernel extends ThreadedKernel {
 		for (int i = 0; i < physicalPageCount; i++) {
 			freePPN.add(i);
 		}
+
+		System.out.println("TOTAL NUMBER OF PAGES: " + physicalPageCount);
 	}
 
 	/**
@@ -136,11 +138,12 @@ public class UserKernel extends ThreadedKernel {
 	}
 
 	public static int acquirePPN() {
-		return freePPN.pollFirst();
+		return freePPN.pollLast();
 	}
 
 	public static void releasePPN(int physicalPageNumber) {
-		freePPN.addLast(physicalPageNumber);
+		if (!freePPN.contains(physicalPageNumber))
+			freePPN.addFirst(physicalPageNumber);
 	}
 
 	public static void incrementProcessCount() {
