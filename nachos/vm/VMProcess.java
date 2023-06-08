@@ -114,9 +114,9 @@ public class VMProcess extends UserProcess {
 
 						// if page is dirty write it out
 						if (process.pageTable[vpnToEvict].dirty) {
-							int swapPageNumber = VMKernel.freeSwapAreas.isEmpty() ? 
+							int swapPageNumber = VMKernel.openSwapArea.isEmpty() ? 
 											 	 VMKernel.swapAreaCounter++ : 
-											 	 VMKernel.freeSwapAreas.pollLast();
+											 	 VMKernel.openSwapArea.pollLast();
 
 							VMKernel.swappingFile.write(swapPageNumber * Processor.pageSize, 
 											   Machine.processor().getMemory(), 
@@ -139,12 +139,18 @@ public class VMProcess extends UserProcess {
 					pagesForProcess.add(ppn);
 
 					if(pageTable[vpn].dirty) {
+						// pin the page from inverted page table
+						VMKernel.invertedPageTable[ppn].pin = true;
+
+						// increment pinned count
+						VMKernel.numPinnedPages += 1;
+
 						VMKernel.swappingFile.read(pageTable[vpn].ppn * Processor.pageSize, 
 										  Machine.processor().getMemory(), 
 										  Processor.makeAddress(ppn, 0), 
 										  Processor.pageSize);
 
-                        VMKernel.freeSwapAreas.add(pageTable[vpn].ppn);
+                        VMKernel.openSwapArea.add(pageTable[vpn].ppn);
 
 						pageTable[vpn].ppn = ppn;
 
@@ -153,6 +159,7 @@ public class VMProcess extends UserProcess {
 						VMKernel.invertedPageTable[ppn].process = this;
                         VMKernel.invertedPageTable[ppn].vpn = vpn;
 						VMKernel.invertedPageTable[ppn].pin = false;
+						VMKernel.numPinnedPages -= 1;
 
 						// release lock before returning
 						UserKernel.freePPNLock.release();
@@ -164,11 +171,16 @@ public class VMProcess extends UserProcess {
 					pageTable[vpn].valid = true;
 					pageTable[vpn].used = true;
 
+					VMKernel.invertedPageTable[ppn].pin = true;
+					VMKernel.numPinnedPages += 1;
+
 					section.loadPage(i, ppn);
 
 					VMKernel.invertedPageTable[ppn].process = this;
 					VMKernel.invertedPageTable[ppn].vpn = vpn;
 					VMKernel.invertedPageTable[ppn].pin = false;
+
+					VMKernel.numPinnedPages -= 1;
 
 					// release lock before returning since we are done
 					UserKernel.freePPNLock.release();
@@ -211,9 +223,9 @@ public class VMProcess extends UserProcess {
 
 					// if page is dirty write it out
 					if (process.pageTable[vpn].dirty) {
-						int swapPageNumber = VMKernel.freeSwapAreas.isEmpty() ? 
+						int swapPageNumber = VMKernel.openSwapArea.isEmpty() ? 
 											 VMKernel.swapAreaCounter++ : 
-											 VMKernel.freeSwapAreas.pollLast();
+											 VMKernel.openSwapArea.pollLast();
 
 						VMKernel.swappingFile.write(swapPageNumber * Processor.pageSize, 
 											Machine.processor().getMemory(), 
@@ -236,12 +248,15 @@ public class VMProcess extends UserProcess {
 				pagesForProcess.add(ppn);
 
 				if(pageTable[virtPage].dirty) {
+					VMKernel.invertedPageTable[ppn].pin = true;
+					VMKernel.numPinnedPages += 1;
+
 					VMKernel.swappingFile.read(pageTable[virtPage].ppn * Processor.pageSize, 
 										Machine.processor().getMemory(), 
 										Processor.makeAddress(ppn, 0), 
 										Processor.pageSize);
 
-					VMKernel.freeSwapAreas.add(pageTable[virtPage].ppn);
+					VMKernel.openSwapArea.add(pageTable[virtPage].ppn);
 
 					pageTable[virtPage].ppn = ppn;
 
@@ -249,7 +264,9 @@ public class VMProcess extends UserProcess {
 
 					VMKernel.invertedPageTable[ppn].process = this;
 					VMKernel.invertedPageTable[ppn].vpn = virtPage;
+
 					VMKernel.invertedPageTable[ppn].pin = false;
+					VMKernel.numPinnedPages -= 1;
 					
 					// release lock before returning
 					UserKernel.freePPNLock.release();

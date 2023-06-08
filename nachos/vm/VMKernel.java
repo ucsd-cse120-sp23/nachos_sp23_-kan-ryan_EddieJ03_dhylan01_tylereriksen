@@ -39,7 +39,7 @@ public class VMKernel extends UserKernel {
 
 		swappingFile = ThreadedKernel.fileSystem.open("SwappingFile", true);
 
-		freeSwapAreas = new LinkedList<>();
+		openSwapArea = new LinkedList<>();
 
 		swapAreaCounter = 0;
 
@@ -78,7 +78,7 @@ public class VMKernel extends UserKernel {
 	 * Terminate this kernel. Never returns.
 	 */
 	public void terminate() {
-		System.out.println(VMKernel.freeSwapAreas);
+		System.out.println(VMKernel.openSwapArea);
 		swappingFile.close();
         ThreadedKernel.fileSystem.remove("SwappingFile");
 		super.terminate();
@@ -89,7 +89,7 @@ public class VMKernel extends UserKernel {
 
 	private static final char dbgVM = 'v';
 
-	public static LinkedList<Integer> freeSwapAreas;
+	public static LinkedList<Integer> openSwapArea;
 
 	public static int swapAreaCounter;
 
