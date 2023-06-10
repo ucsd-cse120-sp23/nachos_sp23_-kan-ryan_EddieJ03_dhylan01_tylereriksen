@@ -77,11 +77,12 @@ public class VMProcess extends UserProcess {
 				if(vpn == badPage) {
 					// the ppn we will assign the faulting vpn to
 					int ppn;
+					int numPhysPages = Machine.processor().getNumPhysPages();
 
 					// do we have enough free physical pages?
 					if (UserKernel.freePPN.size() == 0) {
 						// go ahead and sleep if everything is pinned
-						if(VMKernel.numPinnedPages == Machine.processor().getNumPhysPages()) {
+						if(VMKernel.numPinnedPages == numPhysPages) {
 							VMKernel.condition.sleep();
 						}
 
@@ -92,7 +93,7 @@ public class VMProcess extends UserProcess {
 						while(process.pageTable[vpnToEvict].used) {
 							// if page is pinned increment VMKernel.pageReplacementIndex and continue
 							if (pin) {
-								VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+								VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1)%numPhysPages;
 								continue;
 							}
 
@@ -100,7 +101,7 @@ public class VMProcess extends UserProcess {
 							process.pageTable[vpnToEvict].used = false;
 
 							// increment VMKernel.pageReplacementIndex
-							VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+							VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1)%numPhysPages;
 
 							// update process, vpn, pin
 							process = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].process;
@@ -128,7 +129,7 @@ public class VMProcess extends UserProcess {
 						}
 
 						// increment VMKernel.pageReplacementIndex
-						VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+						VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % numPhysPages;
 
 						// invalidate evicted entry
 						process.pageTable[vpnToEvict].valid = false;
@@ -196,19 +197,30 @@ public class VMProcess extends UserProcess {
 			if (virtPage == badPage) {
 				// the ppn we will assign the faulting vpn to
 				int ppn;
+				int numPhysPages = Machine.processor().getNumPhysPages();
 
 				// do we have enough free physical pages?
 				if (UserKernel.freePPN.size() == 0) {
+					// go ahead and sleep if everything is pinned
+					if(VMKernel.numPinnedPages == numPhysPages) {
+						VMKernel.condition.sleep();
+					}
+
 					UserProcess process = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].process;
 					int vpn = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].vpn;
 					boolean pin = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].pin;
 
 					while(process.pageTable[vpn].used) {
+						if (pin) {
+							VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1)%numPhysPages;
+							continue;
+						}
+
 						// set used to false
 						process.pageTable[vpn].used = false;
 
 						// increment VMKernel.pageReplacementIndex
-						VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+						VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1)%numPhysPages;
 
 						// update process, vpn, pin
 						process = VMKernel.invertedPageTable[VMKernel.pageReplacementIndex].process;
@@ -237,7 +249,7 @@ public class VMProcess extends UserProcess {
 					}
 
 					// increment VMKernel.pageReplacementIndex
-					VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % Machine.processor().getNumPhysPages();
+					VMKernel.pageReplacementIndex = (VMKernel.pageReplacementIndex + 1) % numPhysPages;
 
 					// invalidate evicted entry
 					process.pageTable[vpn].valid = false;
@@ -390,6 +402,7 @@ public class VMProcess extends UserProcess {
 				System.out.println("PAGE FAULT");
 				handlePagefault(Processor.makeAddress(currentVirtualPage, 0));
 
+				 // something horrible happened 
 				if (!pageTable[currentVirtualPage].valid) {
 					break;
 				}
@@ -499,15 +512,13 @@ public class VMProcess extends UserProcess {
 	 * @param cause the user exception that occurred.
 	 */
 	public void handleException(int cause) {
-		Processor processor = Machine.processor();
-
 		switch (cause) {
-		case Processor.exceptionPageFault:
-			handlePagefault(processor.readRegister(Processor.regBadVAddr)); 
-			break;
-		default:
-			super.handleException(cause);
-			break;
+			case Processor.exceptionPageFault:
+				handlePagefault(Machine.processor().readRegister(Processor.regBadVAddr)); 
+				break;
+			default:
+				super.handleException(cause);
+				break;
 		}
 	}
 

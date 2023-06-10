@@ -79,8 +79,13 @@ public class VMKernel extends UserKernel {
 	 */
 	public void terminate() {
 		System.out.println(VMKernel.openSwapArea);
+
+		// close file
 		swappingFile.close();
+
+		// remove file
         ThreadedKernel.fileSystem.remove("SwappingFile");
+		
 		super.terminate();
 	}
 
